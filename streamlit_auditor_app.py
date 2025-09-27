@@ -9,13 +9,13 @@ import time
 
 # Configuración de la página
 st.set_page_config(
-    page_title="Auditor eCommerce",
-    page_icon="🔍",
+    page_title="Auditor de Tiendas",
+    page_icon="🏪",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# CSS personalizado
+# CSS personalizado con colores corporativos
 st.markdown("""
     <style>
     .main {
@@ -31,31 +31,75 @@ st.markdown("""
         border-radius: 5px;
         margin: 10px 0px;
     }
+    .store-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 10px;
+        color: white;
+        margin-bottom: 2rem;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# Título principal con emoji y estilo
-st.title("🔍 Auditor de Publicaciones eCommerce")
-st.markdown("---")
+# Título principal con información de tiendas
+st.markdown("""
+    <div class="store-header">
+        <h1 style="text-align: center; color: white;">🏪 Sistema de Auditoría de Tiendas</h1>
+        <p style="text-align: center; color: white; margin-top: 10px;">
+            Análisis y control de publicaciones para optimización de ventas
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
 # Inicializar estado de sesión
 if 'audit_completed' not in st.session_state:
     st.session_state.audit_completed = False
 if 'results' not in st.session_state:
     st.session_state.results = None
+if 'selected_store' not in st.session_state:
+    st.session_state.selected_store = None
+
+# Lista de tiendas que mencionaste
+TIENDAS_DISPONIBLES = [
+    "Avenida",
+    "Falabella", 
+    "Paris",
+    "Ripley",
+    "La Polar",
+    "Hites",
+    "Otro (Especificar)"
+]
 
 # Sidebar para configuración
 with st.sidebar:
-    st.header("⚙️ Configuración")
+    st.header("⚙️ Configuración de Auditoría")
     
-    # Umbrales de auditoría
-    st.subheader("Umbrales de Análisis")
+    # Selección de tienda
+    st.subheader("🏬 Seleccionar Tienda")
+    selected_store = st.selectbox(
+        "Tienda a auditar:",
+        TIENDAS_DISPONIBLES,
+        help="Selecciona la tienda que deseas auditar"
+    )
+    
+    if selected_store == "Otro (Especificar)":
+        custom_store = st.text_input("Nombre de la tienda:")
+        if custom_store:
+            selected_store = custom_store
+    
+    st.session_state.selected_store = selected_store
+    
+    st.markdown("---")
+    
+    # Parámetros de auditoría
+    st.subheader("📊 Parámetros de Control")
+    
     price_threshold = st.slider(
         "Variación de precio máxima (%)",
         min_value=1,
         max_value=20,
         value=5,
-        help="Porcentaje máximo aceptable de variación en precios"
+        help="Diferencia máxima aceptable entre precio publicado y base de datos"
     )
     
     stock_minimum = st.number_input(
@@ -63,450 +107,568 @@ with st.sidebar:
         min_value=1,
         max_value=100,
         value=5,
-        help="Cantidad mínima de stock para no generar alerta"
+        help="Cantidad mínima antes de generar alerta"
+    )
+    
+    dias_sin_venta = st.number_input(
+        "Días sin venta para alerta",
+        min_value=7,
+        max_value=90,
+        value=30,
+        help="Productos sin movimiento en este período serán marcados"
     )
     
     st.markdown("---")
-    st.subheader("🏪 Marketplace")
-    marketplace = st.selectbox(
-        "Selecciona el marketplace",
-        ["MercadoLibre", "Amazon", "Shopify", "WooCommerce", "Otro"]
-    )
+    
+    # Información de ayuda
+    st.subheader("📚 Guía Rápida")
+    with st.expander("¿Cómo realizar la auditoría?"):
+        st.write("""
+        1. **Selecciona la tienda** a auditar
+        2. **Carga el Excel de la tienda** con las publicaciones actuales
+        3. **Carga tu base de datos** con la información maestra
+        4. **Ejecuta la auditoría** para ver resultados
+        5. **Exporta el reporte** con los hallazgos
+        """)
+    
+    with st.expander("Formato de archivos Excel"):
+        st.write("""
+        **Columnas requeridas:**
+        - `SKU` o `ID`: Código del producto
+        - `Nombre` o `Titulo`: Descripción
+        - `Precio`: Precio publicado
+        - `Stock`: Cantidad disponible
+        - `Estado`: Activo/Pausado/Inactivo
+        - `Categoria`: Categoría del producto
+        - `Ultima_Venta`: Fecha última venta (opcional)
+        """)
     
     st.markdown("---")
-    st.info("💡 **Tip**: Ajusta los umbrales según tu tipo de negocio")
+    st.info(f"🏪 **Auditando:** {selected_store}")
 
-# Área principal - Carga de archivos
-col1, col2 = st.columns(2)
+# Área principal - Sistema de carga de archivos
+st.header(f"📋 Auditoría de {selected_store}")
 
-with col1:
-    st.subheader("📊 Datos del Marketplace")
-    marketplace_file = st.file_uploader(
-        "Sube el archivo del marketplace",
-        type=['csv', 'xlsx', 'xls'],
-        help="Archivo con los datos actuales de tus publicaciones"
-    )
+# Crear tabs para mejor organización
+tab1, tab2, tab3 = st.tabs(["📁 Carga de Datos", "📊 Resultados", "📈 Histórico"])
+
+with tab1:
+    st.markdown("### Cargar archivos para auditoría")
     
-    if marketplace_file:
-        st.success(f"✅ {marketplace_file.name} cargado")
-
-with col2:
-    st.subheader("💾 Base de Datos Local")
-    database_file = st.file_uploader(
-        "Sube tu base de datos",
-        type=['csv', 'xlsx', 'xls'],
-        help="Archivo con los datos de tu sistema interno"
-    )
+    col1, col2 = st.columns(2)
     
-    if database_file:
-        st.success(f"✅ {database_file.name} cargado")
+    with col1:
+        st.markdown(f"**📊 Archivo de {selected_store}**")
+        store_file = st.file_uploader(
+            f"Excel con publicaciones de {selected_store}",
+            type=['xlsx', 'xls', 'csv'],
+            key="store_file",
+            help=f"Archivo descargado desde el panel de {selected_store}"
+        )
+        
+        if store_file:
+            st.success(f"✅ {store_file.name} cargado correctamente")
+            # Preview de datos
+            with st.expander("Ver primeras filas"):
+                df_preview = pd.read_excel(store_file) if store_file.name.endswith(('.xlsx', '.xls')) else pd.read_csv(store_file)
+                st.dataframe(df_preview.head(), use_container_width=True)
+    
+    with col2:
+        st.markdown("**💾 Base de Datos Maestra**")
+        database_file = st.file_uploader(
+            "Excel con información de productos",
+            type=['xlsx', 'xls', 'csv'],
+            key="database_file",
+            help="Tu base de datos con precios y stock correctos"
+        )
+        
+        if database_file:
+            st.success(f"✅ {database_file.name} cargado correctamente")
+            # Preview de datos
+            with st.expander("Ver primeras filas"):
+                df_preview = pd.read_excel(database_file) if database_file.name.endswith(('.xlsx', '.xls')) else pd.read_csv(database_file)
+                st.dataframe(df_preview.head(), use_container_width=True)
 
-# Función para cargar datos
-@st.cache_data
-def load_data(file):
-    """Cargar archivo CSV o Excel"""
-    try:
-        if file.name.endswith('.csv'):
-            return pd.read_csv(file)
-        else:
-            return pd.read_excel(file)
-    except Exception as e:
-        st.error(f"Error al cargar archivo: {str(e)}")
-        return None
-
-# Función de auditoría principal
-def perform_audit(mp_df, db_df, price_threshold, stock_minimum):
-    """Realizar auditoría comparativa"""
+# Función mejorada de auditoría
+def perform_store_audit(store_df, db_df, store_name, price_threshold, stock_minimum):
+    """Realizar auditoría específica para la tienda"""
     results = {
+        'store_name': store_name,
+        'audit_date': datetime.now().strftime('%Y-%m-%d %H:%M'),
         'summary': {},
         'price_issues': [],
         'stock_issues': [],
         'missing_products': [],
-        'data_quality': {}
+        'inactive_products': [],
+        'recommendations': []
     }
     
-    # Progreso
+    # Barra de progreso
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # 1. Análisis de productos
-    status_text.text("Analizando productos...")
+    # Normalizar nombres de columnas
+    store_df.columns = store_df.columns.str.lower().str.strip()
+    db_df.columns = db_df.columns.str.lower().str.strip()
+    
+    # 1. Análisis general
+    status_text.text(f"Analizando catálogo de {store_name}...")
     progress_bar.progress(20)
     
-    results['summary']['total_marketplace'] = len(mp_df)
-    results['summary']['total_database'] = len(db_df)
+    results['summary']['total_productos_tienda'] = len(store_df)
+    results['summary']['total_productos_bd'] = len(db_df)
     
-    # Detectar columnas comunes
-    common_cols = list(set(mp_df.columns) & set(db_df.columns))
+    # Buscar columna de ID (puede ser 'sku', 'id', 'codigo', etc.)
+    id_columns = ['sku', 'id', 'codigo', 'cod', 'product_id']
+    id_col = None
+    for col in id_columns:
+        if col in store_df.columns and col in db_df.columns:
+            id_col = col
+            break
+    
+    if not id_col:
+        st.error("⚠️ No se encontró columna de identificación común (SKU, ID, etc.)")
+        return results
     
     # 2. Análisis de precios
-    status_text.text("Verificando precios...")
+    status_text.text("Verificando consistencia de precios...")
     progress_bar.progress(40)
     
-    if 'price' in mp_df.columns and 'price' in db_df.columns and 'id' in mp_df.columns:
-        merged = pd.merge(mp_df[['id', 'price']], db_df[['id', 'price']], 
-                         on='id', suffixes=('_mp', '_db'), how='outer')
+    price_columns = ['precio', 'price', 'precio_venta', 'pvp']
+    price_col = None
+    for col in price_columns:
+        if col in store_df.columns:
+            price_col = col
+            break
+    
+    if price_col and price_col in db_df.columns:
+        # Merge de dataframes
+        merged = pd.merge(
+            store_df[[id_col, price_col]], 
+            db_df[[id_col, price_col]], 
+            on=id_col, 
+            suffixes=('_tienda', '_bd'),
+            how='outer',
+            indicator=True
+        )
         
-        # Calcular variaciones
-        merged['variation'] = abs((merged['price_mp'] - merged['price_db']) / merged['price_db'] * 100)
+        # Productos solo en tienda (no en BD)
+        only_in_store = merged[merged['_merge'] == 'left_only']
+        results['missing_products'] = only_in_store[id_col].tolist()
+        results['summary']['productos_no_en_bd'] = len(only_in_store)
         
-        # Identificar problemas
-        price_issues = merged[merged['variation'] > price_threshold].dropna()
-        results['price_issues'] = price_issues.to_dict('records')
-        results['summary']['price_inconsistencies'] = len(price_issues)
+        # Productos solo en BD (no publicados)
+        only_in_db = merged[merged['_merge'] == 'right_only']
+        results['summary']['productos_no_publicados'] = len(only_in_db)
         
-        # Productos faltantes
-        missing = merged[merged['price_db'].isna()]
-        results['missing_products'] = missing['id'].tolist()
-        results['summary']['missing_in_db'] = len(missing)
+        # Comparar precios
+        both = merged[merged['_merge'] == 'both'].copy()
+        if not both.empty:
+            both['variacion_%'] = ((both[f'{price_col}_tienda'] - both[f'{price_col}_bd']) / both[f'{price_col}_bd'] * 100).abs()
+            
+            # Identificar problemas de precio
+            price_issues = both[both['variacion_%'] > price_threshold].copy()
+            if not price_issues.empty:
+                price_issues['diferencia_$'] = price_issues[f'{price_col}_tienda'] - price_issues[f'{price_col}_bd']
+                results['price_issues'] = price_issues[[id_col, f'{price_col}_tienda', f'{price_col}_bd', 'variacion_%', 'diferencia_$']].to_dict('records')
+            
+            results['summary']['productos_con_precio_incorrecto'] = len(price_issues)
+            results['summary']['productos_precio_ok'] = len(both) - len(price_issues)
     
     # 3. Análisis de stock
-    status_text.text("Verificando niveles de stock...")
+    status_text.text("Analizando niveles de stock...")
     progress_bar.progress(60)
     
-    if 'stock' in mp_df.columns:
-        low_stock = mp_df[mp_df['stock'] < stock_minimum]
-        out_of_stock = mp_df[mp_df['stock'] == 0]
-        
-        results['stock_issues'] = low_stock.to_dict('records')
-        results['summary']['low_stock'] = len(low_stock)
-        results['summary']['out_of_stock'] = len(out_of_stock)
+    stock_columns = ['stock', 'cantidad', 'inventory', 'disponible']
+    stock_col = None
+    for col in stock_columns:
+        if col in store_df.columns:
+            stock_col = col
+            break
     
-    # 4. Calidad de datos
-    status_text.text("Evaluando calidad de datos...")
+    if stock_col:
+        # Stock bajo o agotado
+        low_stock = store_df[store_df[stock_col] < stock_minimum].copy()
+        out_of_stock = store_df[store_df[stock_col] == 0].copy()
+        
+        if not low_stock.empty:
+            results['stock_issues'] = low_stock[[id_col, stock_col]].to_dict('records')
+        
+        results['summary']['productos_sin_stock'] = len(out_of_stock)
+        results['summary']['productos_stock_bajo'] = len(low_stock) - len(out_of_stock)
+    
+    # 4. Análisis de estado
+    status_text.text("Verificando estados de publicación...")
     progress_bar.progress(80)
     
-    # Verificar valores nulos
-    null_counts_mp = mp_df.isnull().sum()
-    null_counts_db = db_df.isnull().sum()
+    estado_columns = ['estado', 'status', 'activo', 'state']
+    estado_col = None
+    for col in estado_columns:
+        if col in store_df.columns:
+            estado_col = col
+            break
     
-    results['data_quality']['nulls_marketplace'] = null_counts_mp.to_dict()
-    results['data_quality']['nulls_database'] = null_counts_db.to_dict()
+    if estado_col:
+        # Contar por estado
+        estados = store_df[estado_col].value_counts()
+        results['summary']['distribucion_estados'] = estados.to_dict()
+        
+        # Productos inactivos/pausados
+        inactive_keywords = ['pausado', 'inactivo', 'paused', 'inactive', 'desactivado']
+        inactive = store_df[store_df[estado_col].str.lower().str.contains('|'.join(inactive_keywords), na=False)]
+        if not inactive.empty:
+            results['inactive_products'] = inactive[id_col].tolist()
+            results['summary']['productos_inactivos'] = len(inactive)
     
-    # Verificar duplicados
-    results['data_quality']['duplicates_marketplace'] = mp_df.duplicated().sum()
-    results['data_quality']['duplicates_database'] = db_df.duplicated().sum()
+    # 5. Generar recomendaciones
+    status_text.text("Generando recomendaciones...")
+    progress_bar.progress(90)
     
-    # 5. Calcular score de salud
-    status_text.text("Calculando puntuación final...")
-    progress_bar.progress(100)
+    # Recomendaciones automáticas basadas en hallazgos
+    if results['summary'].get('productos_sin_stock', 0) > 0:
+        results['recommendations'].append({
+            'prioridad': 'ALTA',
+            'tipo': 'Stock',
+            'accion': f"Reponer urgentemente {results['summary']['productos_sin_stock']} productos sin stock"
+        })
     
-    # Score basado en problemas encontrados
-    total_issues = (
-        results['summary'].get('price_inconsistencies', 0) +
-        results['summary'].get('low_stock', 0) +
-        results['summary'].get('out_of_stock', 0) +
-        results['summary'].get('missing_in_db', 0)
+    if results['summary'].get('productos_con_precio_incorrecto', 0) > 0:
+        results['recommendations'].append({
+            'prioridad': 'ALTA',
+            'tipo': 'Precio',
+            'accion': f"Actualizar {results['summary']['productos_con_precio_incorrecto']} productos con precios incorrectos"
+        })
+    
+    if results['summary'].get('productos_no_publicados', 0) > 10:
+        results['recommendations'].append({
+            'prioridad': 'MEDIA',
+            'tipo': 'Catálogo',
+            'accion': f"Publicar {results['summary']['productos_no_publicados']} productos disponibles en BD pero no en tienda"
+        })
+    
+    if results['summary'].get('productos_inactivos', 0) > 0:
+        results['recommendations'].append({
+            'prioridad': 'BAJA',
+            'tipo': 'Estado',
+            'accion': f"Revisar {results['summary']['productos_inactivos']} productos pausados/inactivos"
+        })
+    
+    # Calcular score de salud
+    total_productos = results['summary'].get('total_productos_tienda', 1)
+    problemas = (
+        results['summary'].get('productos_sin_stock', 0) * 2 +  # Peso doble para sin stock
+        results['summary'].get('productos_con_precio_incorrecto', 0) +
+        results['summary'].get('productos_stock_bajo', 0) * 0.5
     )
     
-    max_products = max(results['summary']['total_marketplace'], results['summary']['total_database'])
-    if max_products > 0:
-        health_score = max(0, 100 - (total_issues / max_products * 100))
-    else:
-        health_score = 100
-    
+    health_score = max(0, 100 - (problemas / total_productos * 100))
     results['summary']['health_score'] = round(health_score, 1)
     
-    time.sleep(0.5)  # Pausa dramática
+    progress_bar.progress(100)
+    time.sleep(0.5)
     progress_bar.empty()
     status_text.empty()
     
     return results
 
 # Botón de ejecutar auditoría
-if marketplace_file and database_file:
-    st.markdown("---")
-    
-    if st.button("🎯 Ejecutar Auditoría", type="primary", use_container_width=True):
-        # Cargar datos
-        with st.spinner("Cargando archivos..."):
-            mp_df = load_data(marketplace_file)
-            db_df = load_data(database_file)
+with tab1:
+    if store_file and database_file:
+        st.markdown("---")
         
-        if mp_df is not None and db_df is not None:
-            # Realizar auditoría
-            results = perform_audit(mp_df, db_df, price_threshold, stock_minimum)
-            st.session_state.results = results
-            st.session_state.audit_completed = True
-            st.success("✅ ¡Auditoría completada!")
-            st.balloons()
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button(f"🔍 Ejecutar Auditoría de {selected_store}", 
+                        type="primary", 
+                        use_container_width=True):
+                
+                # Cargar datos
+                with st.spinner(f"Procesando datos de {selected_store}..."):
+                    try:
+                        # Cargar archivos
+                        if store_file.name.endswith('.csv'):
+                            store_df = pd.read_csv(store_file)
+                        else:
+                            store_df = pd.read_excel(store_file)
+                        
+                        if database_file.name.endswith('.csv'):
+                            db_df = pd.read_csv(database_file)
+                        else:
+                            db_df = pd.read_excel(database_file)
+                        
+                        # Realizar auditoría
+                        results = perform_store_audit(
+                            store_df, 
+                            db_df, 
+                            selected_store,
+                            price_threshold, 
+                            stock_minimum
+                        )
+                        
+                        st.session_state.results = results
+                        st.session_state.audit_completed = True
+                        st.success(f"✅ Auditoría de {selected_store} completada exitosamente")
+                        st.balloons()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error al procesar los archivos: {str(e)}")
+                        st.info("Verifica que los archivos tengan el formato correcto")
 
-# Mostrar resultados si la auditoría fue completada
-if st.session_state.audit_completed and st.session_state.results:
-    results = st.session_state.results
-    
-    st.markdown("---")
-    st.header("📊 Resultados de la Auditoría")
-    
-    # Métricas principales
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        health_score = results['summary']['health_score']
-        delta_color = "normal" if health_score > 80 else "inverse" if health_score > 60 else "off"
-        st.metric(
-            label="🏆 Puntuación de Salud",
-            value=f"{health_score}%",
-            delta=f"{'Excelente' if health_score > 80 else 'Regular' if health_score > 60 else 'Necesita atención'}",
-            delta_color=delta_color
-        )
-    
-    with col2:
-        st.metric(
-            label="📦 Productos Totales",
-            value=results['summary']['total_marketplace'],
-            delta=f"{results['summary']['total_database']} en BD"
-        )
-    
-    with col3:
-        st.metric(
-            label="⚠️ Problemas de Precio",
-            value=results['summary'].get('price_inconsistencies', 0),
-            delta=f"Umbral: {price_threshold}%",
-            delta_color="inverse" if results['summary'].get('price_inconsistencies', 0) > 0 else "normal"
-        )
-    
-    with col4:
-        st.metric(
-            label="📉 Stock Bajo/Agotado",
-            value=results['summary'].get('low_stock', 0) + results['summary'].get('out_of_stock', 0),
-            delta=f"{results['summary'].get('out_of_stock', 0)} sin stock",
-            delta_color="inverse" if results['summary'].get('out_of_stock', 0) > 0 else "normal"
-        )
-    
-    # Tabs para diferentes vistas
-    tab1, tab2, tab3, tab4 = st.tabs(["📈 Visualizaciones", "⚠️ Problemas Detectados", "📋 Calidad de Datos", "💾 Exportar"])
-    
-    with tab1:
-        st.subheader("Visualizaciones del Análisis")
+# Mostrar resultados en Tab 2
+with tab2:
+    if st.session_state.audit_completed and st.session_state.results:
+        results = st.session_state.results
         
-        col1, col2 = st.columns(2)
+        # Header con información de la auditoría
+        st.markdown(f"""
+        ### 📊 Resultados de Auditoría - {results['store_name']}
+        **Fecha:** {results['audit_date']}
+        """)
+        
+        # Métricas principales con colores
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            # Gráfico de pie para distribución de problemas
-            if any([results['summary'].get('price_inconsistencies', 0),
-                   results['summary'].get('low_stock', 0),
-                   results['summary'].get('out_of_stock', 0)]):
-                
-                fig_pie = go.Figure(data=[go.Pie(
-                    labels=['Problemas de Precio', 'Stock Bajo', 'Sin Stock'],
-                    values=[
-                        results['summary'].get('price_inconsistencies', 0),
-                        results['summary'].get('low_stock', 0),
-                        results['summary'].get('out_of_stock', 0)
-                    ],
-                    hole=.3,
-                    marker_colors=['#FF6B6B', '#FDD835', '#E53935']
-                )])
-                fig_pie.update_layout(
-                    title="Distribución de Problemas",
-                    height=350
-                )
-                st.plotly_chart(fig_pie, use_container_width=True)
+            health = results['summary'].get('health_score', 0)
+            color = "🟢" if health > 80 else "🟡" if health > 60 else "🔴"
+            st.metric(
+                label=f"{color} Salud del Catálogo",
+                value=f"{health}%",
+                delta="Excelente" if health > 80 else "Regular" if health > 60 else "Crítico"
+            )
         
         with col2:
-            # Gauge chart para health score
-            fig_gauge = go.Figure(go.Indicator(
-                mode="gauge+number+delta",
-                value=results['summary']['health_score'],
-                domain={'x': [0, 1], 'y': [0, 1]},
-                title={'text': "Salud del Catálogo"},
-                delta={'reference': 80},
-                gauge={
-                    'axis': {'range': [None, 100]},
-                    'bar': {'color': "darkgreen" if results['summary']['health_score'] > 80 else "orange" if results['summary']['health_score'] > 60 else "red"},
-                    'steps': [
-                        {'range': [0, 60], 'color': "lightgray"},
-                        {'range': [60, 80], 'color': "lightyellow"},
-                        {'range': [80, 100], 'color': "lightgreen"}
-                    ],
-                    'threshold': {
-                        'line': {'color': "red", 'width': 4},
-                        'thickness': 0.75,
-                        'value': 90
-                    }
-                }
-            ))
-            fig_gauge.update_layout(height=350)
-            st.plotly_chart(fig_gauge, use_container_width=True)
-    
-    with tab2:
-        st.subheader("Problemas Detectados")
+            total = results['summary'].get('total_productos_tienda', 0)
+            st.metric(
+                label="📦 Total Productos",
+                value=f"{total:,}",
+                delta=f"{results['summary'].get('total_productos_bd', 0):,} en BD"
+            )
         
-        # Problemas de precio
-        if results['price_issues']:
-            st.warning(f"⚠️ Se encontraron {len(results['price_issues'])} productos con variación de precio superior al {price_threshold}%")
+        with col3:
+            sin_stock = results['summary'].get('productos_sin_stock', 0)
+            color = "🔴" if sin_stock > 0 else "🟢"
+            st.metric(
+                label=f"{color} Sin Stock",
+                value=sin_stock,
+                delta="Crítico" if sin_stock > 0 else "OK"
+            )
+        
+        with col4:
+            precio_mal = results['summary'].get('productos_con_precio_incorrecto', 0)
+            color = "🔴" if precio_mal > 5 else "🟡" if precio_mal > 0 else "🟢"
+            st.metric(
+                label=f"{color} Precios Incorrectos",
+                value=precio_mal,
+                delta=f">{price_threshold}% variación"
+            )
+        
+        # Tabs para diferentes análisis
+        analysis_tab1, analysis_tab2, analysis_tab3, analysis_tab4 = st.tabs([
+            "💰 Precios", 
+            "📦 Stock", 
+            "📊 Estados",
+            "💡 Recomendaciones"
+        ])
+        
+        with analysis_tab1:
+            st.subheader("Análisis de Precios")
             
-            price_df = pd.DataFrame(results['price_issues'])
-            if not price_df.empty:
-                # Mostrar solo las columnas relevantes
-                display_cols = ['id', 'price_mp', 'price_db', 'variation']
-                if all(col in price_df.columns for col in display_cols):
-                    price_df['variation'] = price_df['variation'].round(2)
+            if results.get('price_issues'):
+                st.warning(f"⚠️ {len(results['price_issues'])} productos con variación de precio superior al {price_threshold}%")
+                
+                # Crear DataFrame para mostrar
+                price_df = pd.DataFrame(results['price_issues'])
+                
+                # Formatear columnas
+                for col in price_df.columns:
+                    if 'precio' in col.lower() or 'price' in col.lower() or 'diferencia_$' in col:
+                        price_df[col] = price_df[col].apply(lambda x: f"${x:,.0f}" if pd.notnull(x) else "")
+                    elif 'variacion_%' in col:
+                        price_df[col] = price_df[col].apply(lambda x: f"{x:.1f}%" if pd.notnull(x) else "")
+                
+                st.dataframe(
+                    price_df,
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Gráfico de variaciones
+                if len(results['price_issues']) > 0:
+                    fig = px.bar(
+                        price_df.head(20),
+                        x=price_df.columns[0],  # SKU/ID
+                        y='variacion_%',
+                        title="Top 20 Productos con Mayor Variación de Precio",
+                        color='variacion_%',
+                        color_continuous_scale=['yellow', 'orange', 'red']
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.success("✅ Todos los precios están dentro del rango aceptable")
+        
+        with analysis_tab2:
+            st.subheader("Análisis de Stock")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Gráfico de distribución de stock
+                stock_data = {
+                    'Estado': ['Sin Stock', 'Stock Bajo', 'Stock OK'],
+                    'Cantidad': [
+                        results['summary'].get('productos_sin_stock', 0),
+                        results['summary'].get('productos_stock_bajo', 0),
+                        results['summary'].get('total_productos_tienda', 0) - 
+                        results['summary'].get('productos_sin_stock', 0) - 
+                        results['summary'].get('productos_stock_bajo', 0)
+                    ]
+                }
+                
+                fig = px.pie(
+                    stock_data,
+                    values='Cantidad',
+                    names='Estado',
+                    title="Distribución de Stock",
+                    color_discrete_map={
+                        'Sin Stock': '#FF4444',
+                        'Stock Bajo': '#FFA500',
+                        'Stock OK': '#00CC00'
+                    }
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                if results.get('stock_issues'):
+                    st.error(f"📦 {len(results['stock_issues'])} productos requieren reposición")
+                    
+                    stock_df = pd.DataFrame(results['stock_issues'])
                     st.dataframe(
-                        price_df[display_cols].head(20),
+                        stock_df.head(20),
                         use_container_width=True,
                         hide_index=True
                     )
+                else:
+                    st.success("✅ Todos los productos tienen stock adecuado")
         
-        # Problemas de stock
-        if results['stock_issues']:
-            st.error(f"📦 Se encontraron {len(results['stock_issues'])} productos con stock bajo")
+        with analysis_tab3:
+            st.subheader("Estados de Publicación")
             
-            stock_df = pd.DataFrame(results['stock_issues'])
-            if not stock_df.empty and 'stock' in stock_df.columns:
-                # Crear visualización de stock
-                fig_stock = px.bar(
-                    stock_df.head(20),
-                    x='id' if 'id' in stock_df.columns else stock_df.index,
-                    y='stock',
-                    title="Productos con Stock Bajo",
-                    color='stock',
-                    color_continuous_scale=['red', 'yellow', 'green']
+            if results['summary'].get('distribucion_estados'):
+                estados = results['summary']['distribucion_estados']
+                
+                # Gráfico de estados
+                fig = px.bar(
+                    x=list(estados.keys()),
+                    y=list(estados.values()),
+                    title="Distribución de Estados de Publicación",
+                    labels={'x': 'Estado', 'y': 'Cantidad'},
+                    color=list(estados.values()),
+                    color_continuous_scale='viridis'
                 )
-                fig_stock.add_hline(y=stock_minimum, line_dash="dash", line_color="red",
-                                   annotation_text=f"Stock mínimo: {stock_minimum}")
-                st.plotly_chart(fig_stock, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Tabla resumen
+                estado_df = pd.DataFrame(estados.items(), columns=['Estado', 'Cantidad'])
+                estado_df['Porcentaje'] = (estado_df['Cantidad'] / estado_df['Cantidad'].sum() * 100).round(1)
+                estado_df['Porcentaje'] = estado_df['Porcentaje'].apply(lambda x: f"{x}%")
+                
+                st.dataframe(estado_df, use_container_width=True, hide_index=True)
         
-        # Productos faltantes
-        if results['missing_products']:
-            st.info(f"🔍 Se encontraron {len(results['missing_products'])} productos en el marketplace que no están en la base de datos")
-            with st.expander("Ver productos faltantes"):
-                st.write(results['missing_products'][:50])  # Mostrar primeros 50
-    
-    with tab3:
-        st.subheader("Análisis de Calidad de Datos")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**📊 Marketplace**")
-            st.write(f"Registros duplicados: {results['data_quality'].get('duplicates_marketplace', 0)}")
+        with analysis_tab4:
+            st.subheader("💡 Recomendaciones de Acción")
             
-            nulls_mp = results['data_quality'].get('nulls_marketplace', {})
-            if nulls_mp:
-                null_df = pd.DataFrame(list(nulls_mp.items()), columns=['Columna', 'Valores Nulos'])
-                null_df = null_df[null_df['Valores Nulos'] > 0]
-                if not null_df.empty:
-                    st.dataframe(null_df, use_container_width=True, hide_index=True)
+            if results.get('recommendations'):
+                for rec in results['recommendations']:
+                    if rec['prioridad'] == 'ALTA':
+                        st.error(f"🔴 **{rec['prioridad']}** - {rec['tipo']}: {rec['accion']}")
+                    elif rec['prioridad'] == 'MEDIA':
+                        st.warning(f"🟡 **{rec['prioridad']}** - {rec['tipo']}: {rec['accion']}")
+                    else:
+                        st.info(f"🔵 **{rec['prioridad']}** - {rec['tipo']}: {rec['accion']}")
+            else:
+                st.success("✅ No hay recomendaciones urgentes. El catálogo está en buen estado.")
         
-        with col2:
-            st.write("**💾 Base de Datos**")
-            st.write(f"Registros duplicados: {results['data_quality'].get('duplicates_database', 0)}")
-            
-            nulls_db = results['data_quality'].get('nulls_database', {})
-            if nulls_db:
-                null_df = pd.DataFrame(list(nulls_db.items()), columns=['Columna', 'Valores Nulos'])
-                null_df = null_df[null_df['Valores Nulos'] > 0]
-                if not null_df.empty:
-                    st.dataframe(null_df, use_container_width=True, hide_index=True)
-    
-    with tab4:
-        st.subheader("Exportar Resultados")
+        # Sección de exportación
+        st.markdown("---")
+        st.subheader("📥 Exportar Resultados")
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            # Exportar como Excel
-            if st.button("📊 Descargar Excel", use_container_width=True):
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    # Resumen
-                    summary_df = pd.DataFrame([results['summary']])
-                    summary_df.to_excel(writer, sheet_name='Resumen', index=False)
-                    
-                    # Problemas de precio
-                    if results['price_issues']:
-                        price_df = pd.DataFrame(results['price_issues'])
-                        price_df.to_excel(writer, sheet_name='Problemas_Precio', index=False)
-                    
-                    # Problemas de stock
-                    if results['stock_issues']:
-                        stock_df = pd.DataFrame(results['stock_issues'])
-                        stock_df.to_excel(writer, sheet_name='Problemas_Stock', index=False)
+            # Generar Excel
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # Hoja de resumen
+                summary_df = pd.DataFrame([results['summary']])
+                summary_df.to_excel(writer, sheet_name='Resumen', index=False)
                 
-                output.seek(0)
-                st.download_button(
-                    label="💾 Descargar Excel",
-                    data=output,
-                    file_name=f"audit_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                # Hoja de problemas de precio
+                if results.get('price_issues'):
+                    price_df = pd.DataFrame(results['price_issues'])
+                    price_df.to_excel(writer, sheet_name='Problemas_Precio', index=False)
+                
+                # Hoja de problemas de stock
+                if results.get('stock_issues'):
+                    stock_df = pd.DataFrame(results['stock_issues'])
+                    stock_df.to_excel(writer, sheet_name='Problemas_Stock', index=False)
+                
+                # Hoja de recomendaciones
+                if results.get('recommendations'):
+                    rec_df = pd.DataFrame(results['recommendations'])
+                    rec_df.to_excel(writer, sheet_name='Recomendaciones', index=False)
+            
+            output.seek(0)
+            
+            st.download_button(
+                label="📊 Descargar Reporte Excel",
+                data=output,
+                file_name=f"Auditoria_{selected_store}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         
         with col2:
-            # Exportar como CSV
-            if st.button("📄 Descargar CSV", use_container_width=True):
-                summary_df = pd.DataFrame([results['summary']])
-                csv = summary_df.to_csv(index=False)
-                st.download_button(
-                    label="💾 Descargar CSV",
-                    data=csv,
-                    file_name=f"audit_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
+            # CSV resumido
+            summary_df = pd.DataFrame([results['summary']])
+            csv = summary_df.to_csv(index=False)
+            
+            st.download_button(
+                label="📄 Descargar Resumen CSV",
+                data=csv,
+                file_name=f"Resumen_{selected_store}_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
         
         with col3:
-            # Generar reporte de recomendaciones
-            if st.button("📝 Generar Recomendaciones", use_container_width=True):
-                recommendations = []
-                
-                if results['summary'].get('out_of_stock', 0) > 0:
-                    recommendations.append(f"🔴 URGENTE: Reponer {results['summary']['out_of_stock']} productos sin stock")
-                
-                if results['summary'].get('price_inconsistencies', 0) > 5:
-                    recommendations.append(f"🟡 IMPORTANTE: Revisar {results['summary']['price_inconsistencies']} productos con variación de precio")
-                
-                if results['summary'].get('missing_in_db', 0) > 0:
-                    recommendations.append(f"🟢 RECOMENDADO: Agregar {results['summary']['missing_in_db']} productos a la base de datos")
-                
-                if results['summary']['health_score'] < 60:
-                    recommendations.append("🔴 CRÍTICO: La salud del catálogo requiere atención inmediata")
-                
-                if recommendations:
-                    st.write("### 📋 Recomendaciones de Acción:")
-                    for rec in recommendations:
-                        st.write(rec)
-                else:
-                    st.success("✅ ¡Tu catálogo está en excelente estado!")
+            # Botón para nueva auditoría
+            if st.button("🔄 Nueva Auditoría", use_container_width=True):
+                st.session_state.audit_completed = False
+                st.session_state.results = None
+                st.rerun()
+
+# Tab de histórico
+with tab3:
+    st.subheader("📈 Histórico de Auditorías")
+    st.info("Esta sección mostrará el histórico de auditorías realizadas (próximamente)")
+    
+    # Placeholder para futuras mejoras
+    st.markdown("""
+    **Funcionalidades futuras:**
+    - 📊 Gráficos de tendencias
+    - 📅 Comparación entre períodos
+    - 🎯 KPIs históricos
+    - 📈 Evolución de la salud del catálogo
+    """)
 
 # Footer
 st.markdown("---")
 st.markdown(
-    """
-    <div style='text-align: center; color: gray;'>
-        <p>Desarrollado con ❤️ usando Streamlit | 
-        <a href='https://github.com/tu-usuario/ecommerce-auditor' target='_blank'>GitHub</a> | 
-        Última actualización: {}</p>
+    f"""
+    <div style='text-align: center; color: gray; padding: 20px;'>
+        <p>Sistema de Auditoría de Tiendas v1.0 | 
+        Última actualización: {datetime.now().strftime("%d/%m/%Y %H:%M")} |
+        Desarrollado para optimización de catálogos retail</p>
     </div>
-    """.format(datetime.now().strftime("%Y-%m-%d")),
+    """,
     unsafe_allow_html=True
 )
-
-# Sidebar con información adicional
-with st.sidebar:
-    st.markdown("---")
-    st.subheader("📚 Ayuda")
-    with st.expander("¿Cómo usar esta herramienta?"):
-        st.write("""
-        1. **Carga los archivos**: Sube el CSV/Excel del marketplace y tu base de datos
-        2. **Ajusta los umbrales**: Configura los parámetros según tu negocio
-        3. **Ejecuta la auditoría**: Click en el botón para analizar
-        4. **Revisa los resultados**: Explora las visualizaciones y problemas
-        5. **Exporta el reporte**: Descarga los resultados en Excel o CSV
-        """)
-    
-    with st.expander("Formatos aceptados"):
-        st.write("""
-        - **CSV**: Separado por comas
-        - **Excel**: .xlsx, .xls
-        
-        **Columnas recomendadas**:
-        - `id`: Identificador del producto
-        - `price`: Precio del producto
-        - `stock`: Cantidad en stock
-        - `title`: Nombre del producto
-        - `status`: Estado de la publicación
-        """)
-    
-    st.markdown("---")
-    st.info("💡 **Tip del día**: Ejecuta auditorías semanalmente para mantener tu catálogo optimizado")
