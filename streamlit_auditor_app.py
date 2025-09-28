@@ -264,14 +264,16 @@ def realizar_scraping(df_tienda, tienda_config, progress_bar, status_text):
                   for idx, row in df_tienda.iterrows() if pd.notna(row.get('url'))}
         
         completed = 0
+        total_futures = len(futures)  # Usar el total real de futures
+        
         for future in as_completed(futures):
             completed += 1
             idx = futures[future]
             
-            # Actualizar progreso
-            progress = int((completed / total_urls) * 100)
+            # Actualizar progreso - asegurar que esté entre 0.0 y 1.0
+            progress = min(completed / total_futures, 1.0)  # Limitar a 1.0 máximo
             progress_bar.progress(progress)
-            status_text.text(f"Escaneando URL {completed}/{total_urls}...")
+            status_text.text(f"Escaneando URL {completed}/{total_futures}...")
             
             try:
                 resultado = future.result()
@@ -462,7 +464,9 @@ with tab1:
                         
                         # Simular resultados
                         resultados = []
-                        for idx, row in df_tienda.iterrows():
+                        total_items = len(df_tienda)
+                        
+                        for i, (idx, row) in enumerate(df_tienda.iterrows()):
                             # Simular variación de precio aleatoria
                             variacion = np.random.uniform(-10, 10)
                             precio_web = row['precio_maestro'] * (1 + variacion/100)
@@ -476,8 +480,10 @@ with tab1:
                                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                             })
                             
-                            progress_bar.progress((idx + 1) / len(df_tienda))
-                            status_text.text(f"Simulando producto {idx + 1}/{len(df_tienda)}")
+                            # Progreso entre 0.0 y 1.0
+                            progress = min((i + 1) / total_items, 1.0)
+                            progress_bar.progress(progress)
+                            status_text.text(f"Simulando producto {i + 1}/{total_items}")
                             time.sleep(0.1)  # Pausa para efecto visual
                         
                         progress_bar.empty()
@@ -509,9 +515,25 @@ with tab1:
                         df_tienda.loc[idx, 'timestamp'] = resultado.get('timestamp')
                     
                     # Calcular variaciones
-                    df_tienda['variacion_precio_%'] = ((df_tienda['precio_web'] - df_tienda['precio_maestro']) / df_tienda['precio_maestro'] * 100).round(2)
-                    df_tienda['precio_ok'] = df_tienda['variacion_precio_%'].abs() <= price_threshold
-                    df_tienda['requiere_accion'] = (~df_tienda['precio_ok']) | (df_tienda['stock_web'] == 'No')
+                    df_tienda['variacion_precio_%'] = 0.0  # Inicializar columna
+                    
+                    # Calcular solo donde hay datos válidos
+                    mask = (df_tienda['precio_web'].notna()) & (df_tienda['precio_maestro'].notna()) & (df_tienda['precio_maestro'] != 0)
+                    df_tienda.loc[mask, 'variacion_precio_%'] = (
+                        (df_tienda.loc[mask, 'precio_web'] - df_tienda.loc[mask, 'precio_maestro']) / 
+                        df_tienda.loc[mask, 'precio_maestro'] * 100
+                    ).round(2)
+                    
+                    # Determinar si el precio está OK
+                    df_tienda['precio_ok'] = False  # Inicializar como False
+                    df_tienda.loc[mask, 'precio_ok'] = df_tienda.loc[mask, 'variacion_precio_%'].abs() <= price_threshold
+                    
+                    # Marcar productos que requieren acción
+                    df_tienda['requiere_accion'] = (
+                        (~df_tienda['precio_ok'] & df_tienda['precio_web'].notna()) | 
+                        (df_tienda['stock_web'] == 'No') |
+                        (df_tienda['error_scraping'].notna())
+                    )
                     
                     # Guardar en sesión
                     st.session_state.audit_results = df_tienda
@@ -526,7 +548,8 @@ with tab1:
                         st.metric("Total Auditados", total)
                     
                     with col2:
-                        errores_precio = len(df_tienda[~df_tienda['precio_ok']])
+                        # Contar solo los que tienen precio_ok = False (y no son NaN)
+                        errores_precio = len(df_tienda[(df_tienda['precio_ok'] == False) & df_tienda['precio_web'].notna()])
                         st.metric("Errores de Precio", errores_precio, 
                                  delta=f"{(errores_precio/total*100):.1f}%" if total > 0 else "0%")
                     
@@ -573,19 +596,22 @@ with tab2:
         df_filtrado = df_results.copy()
         
         if filtro == "Solo errores de precio":
-            df_filtrado = df_filtrado[~df_filtrado['precio_ok']]
+            df_filtrado = df_filtrado[(df_filtrado['precio_ok'] == False) & df_filtrado['precio_web'].notna()]
         elif filtro == "Solo sin stock":
             df_filtrado = df_filtrado[df_filtrado['stock_web'] == 'No']
         elif filtro == "Requieren acción":
-            df_filtrado = df_filtrado[df_filtrado['requiere_accion']]
+            df_filtrado = df_filtrado[df_filtrado['requiere_accion'] == True]
         
         # Ordenar
         if orden == "Variación de precio":
-            df_filtrado = df_filtrado.sort_values('variacion_precio_%', ascending=False, key=lambda x: x.abs())
+            # Ordenar por valor absoluto de variación, poniendo NaN al final
+            df_filtrado['abs_variacion'] = df_filtrado['variacion_precio_%'].abs()
+            df_filtrado = df_filtrado.sort_values('abs_variacion', ascending=False, na_position='last')
+            df_filtrado = df_filtrado.drop('abs_variacion', axis=1)
         elif orden == "SKU":
-            df_filtrado = df_filtrado.sort_values('sku')
+            df_filtrado = df_filtrado.sort_values('sku', na_position='last')
         elif orden == "Stock":
-            df_filtrado = df_filtrado.sort_values('stock_web')
+            df_filtrado = df_filtrado.sort_values('stock_web', na_position='last')
         
         # Mostrar tabla con formato
         st.dataframe(
@@ -626,7 +652,7 @@ with tab2:
                 df_results.to_excel(writer, sheet_name='Auditoría Completa', index=False)
                 
                 # Hoja de errores
-                df_errores = df_filtrado[df_filtrado['requiere_accion']]
+                df_errores = df_results[df_results['requiere_accion'] == True]
                 if not df_errores.empty:
                     df_errores.to_excel(writer, sheet_name='Requieren Acción', index=False)
             
@@ -641,16 +667,31 @@ with tab2:
         
         with col2:
             # CSV de errores
-            csv = df_filtrado[df_filtrado['requiere_accion']].to_csv(index=False)
-            st.download_button(
-                label="📄 Descargar Solo Errores (CSV)",
-                data=csv,
-                file_name=f"Errores_{selected_store}_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
+            df_errores = df_filtrado[df_filtrado['requiere_accion'] == True]
+            if not df_errores.empty:
+                csv = df_errores.to_csv(index=False)
+                st.download_button(
+                    label="📄 Descargar Solo Errores (CSV)",
+                    data=csv,
+                    file_name=f"Errores_{selected_store}_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info("No hay errores para exportar")
         
         with col3:
             # Reporte resumen
+            # Contar elementos correctamente
+            errores_precio_count = len(df_results[(df_results['precio_ok'] == False) & df_results['precio_web'].notna()])
+            sin_stock_count = len(df_results[df_results['stock_web'] == 'No'])
+            requieren_accion_count = len(df_results[df_results['requiere_accion'] == True])
+            
+            # Obtener DataFrames filtrados
+            df_errores_precio = df_results[(df_results['precio_ok'] == False) & df_results['precio_web'].notna()][
+                ['sku', 'precio_maestro', 'precio_web', 'variacion_precio_%']
+            ]
+            df_sin_stock = df_results[df_results['stock_web'] == 'No'][['sku', 'url']]
+            
             resumen = f"""
 REPORTE DE AUDITORÍA - {selected_store}
 Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M')}
@@ -658,15 +699,15 @@ Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
 RESUMEN:
 - Total de productos auditados: {len(df_results)}
-- Errores de precio: {len(df_results[~df_results['precio_ok']])}
-- Productos sin stock: {len(df_results[df_results['stock_web'] == 'No'])}
-- Requieren acción inmediata: {len(df_results[df_results['requiere_accion']])}
+- Errores de precio: {errores_precio_count}
+- Productos sin stock: {sin_stock_count}
+- Requieren acción inmediata: {requieren_accion_count}
 
 PRODUCTOS CON ERRORES DE PRECIO:
-{df_results[~df_results['precio_ok']][['sku', 'precio_maestro', 'precio_web', 'variacion_precio_%']].to_string()}
+{df_errores_precio.to_string() if not df_errores_precio.empty else "No hay errores de precio"}
 
 PRODUCTOS SIN STOCK:
-{df_results[df_results['stock_web'] == 'No'][['sku', 'url']].to_string()}
+{df_sin_stock.to_string() if not df_sin_stock.empty else "Todos los productos tienen stock"}
             """
             
             st.download_button(
@@ -689,7 +730,13 @@ with tab3:
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            accuracy = (len(df[df['precio_ok']]) / len(df) * 100) if len(df) > 0 else 0
+            # Calcular accuracy solo con valores válidos
+            precios_validos = df[df['precio_web'].notna()]
+            if len(precios_validos) > 0:
+                accuracy = (len(precios_validos[precios_validos['precio_ok'] == True]) / len(precios_validos) * 100)
+            else:
+                accuracy = 0
+            
             st.metric(
                 "Precisión de Precios",
                 f"{accuracy:.1f}%",
@@ -705,7 +752,13 @@ with tab3:
             )
         
         with col3:
-            variacion_promedio = df['variacion_precio_%'].abs().mean() if not df.empty else 0
+            # Calcular variación promedio solo con valores válidos
+            variaciones_validas = df['variacion_precio_%'].dropna()
+            if len(variaciones_validas) > 0:
+                variacion_promedio = variaciones_validas.abs().mean()
+            else:
+                variacion_promedio = 0
+                
             st.metric(
                 "Variación Promedio",
                 f"{variacion_promedio:.1f}%",
@@ -727,26 +780,31 @@ with tab3:
         
         with col1:
             # Gráfico de distribución de variaciones
-            fig_hist = px.histogram(
-                df[df['variacion_precio_%'].notna()],
-                x='variacion_precio_%',
-                title='Distribución de Variaciones de Precio',
-                labels={'variacion_precio_%': 'Variación (%)', 'count': 'Cantidad'},
-                color_discrete_sequence=['#764ba2']
-            )
-            fig_hist.add_vline(x=-price_threshold, line_dash="dash", line_color="red")
-            fig_hist.add_vline(x=price_threshold, line_dash="dash", line_color="red")
-            st.plotly_chart(fig_hist, use_container_width=True)
+            df_para_histograma = df[df['variacion_precio_%'].notna()]
+            
+            if not df_para_histograma.empty:
+                fig_hist = px.histogram(
+                    df_para_histograma,
+                    x='variacion_precio_%',
+                    title='Distribución de Variaciones de Precio',
+                    labels={'variacion_precio_%': 'Variación (%)', 'count': 'Cantidad'},
+                    color_discrete_sequence=['#764ba2']
+                )
+                fig_hist.add_vline(x=-price_threshold, line_dash="dash", line_color="red")
+                fig_hist.add_vline(x=price_threshold, line_dash="dash", line_color="red")
+                st.plotly_chart(fig_hist, use_container_width=True)
+            else:
+                st.info("No hay datos de variación para mostrar")
         
         with col2:
             # Gráfico de pie de estados
             estados = pd.DataFrame({
                 'Estado': ['Precio OK', 'Error Precio', 'Sin Stock', 'OK Total'],
                 'Cantidad': [
-                    len(df[df['precio_ok']]),
-                    len(df[~df['precio_ok']]),
+                    len(df[(df['precio_ok'] == True) & df['precio_web'].notna()]),
+                    len(df[(df['precio_ok'] == False) & df['precio_web'].notna()]),
                     len(df[df['stock_web'] == 'No']),
-                    len(df[(df['precio_ok']) & (df['stock_web'] != 'No')])
+                    len(df[(df['precio_ok'] == True) & (df['stock_web'] != 'No') & df['precio_web'].notna()])
                 ]
             })
             
@@ -768,16 +826,24 @@ with tab3:
         st.markdown("---")
         st.subheader("🔴 Top 10 Productos con Mayor Variación")
         
-        top_variaciones = df.nlargest(10, 'variacion_precio_%')[['sku', 'precio_maestro', 'precio_web', 'variacion_precio_%', 'url']]
+        # Filtrar solo los que tienen variación válida
+        df_con_variacion = df[df['variacion_precio_%'].notna() & (df['variacion_precio_%'].abs() > 0)]
         
-        st.dataframe(
-            top_variaciones.style.format({
-                'precio_maestro': '${:,.0f}',
-                'precio_web': '${:,.0f}',
-                'variacion_precio_%': '{:.1f}%'
-            }).background_gradient(subset=['variacion_precio_%'], cmap='Reds'),
-            use_container_width=True
-        )
+        if not df_con_variacion.empty:
+            top_variaciones = df_con_variacion.nlargest(10, 'variacion_precio_%', keep='all')[
+                ['sku', 'precio_maestro', 'precio_web', 'variacion_precio_%', 'url']
+            ]
+            
+            st.dataframe(
+                top_variaciones.style.format({
+                    'precio_maestro': '${:,.0f}',
+                    'precio_web': '${:,.0f}',
+                    'variacion_precio_%': '{:.1f}%'
+                }).background_gradient(subset=['variacion_precio_%'], cmap='Reds'),
+                use_container_width=True
+            )
+        else:
+            st.info("No hay productos con variación de precio detectada")
         
         # Timeline de auditoría
         if 'timestamp' in df.columns:
