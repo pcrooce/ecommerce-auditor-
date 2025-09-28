@@ -839,7 +839,7 @@ with tab3:
                     'precio_maestro': '${:,.0f}',
                     'precio_web': '${:,.0f}',
                     'variacion_precio_%': '{:.1f}%'
-                }).background_gradient(subset=['variacion_precio_%'], cmap='Reds'),
+                }),
                 use_container_width=True
             )
         else:
