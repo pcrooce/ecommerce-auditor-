@@ -789,6 +789,14 @@ with tab2:
         columnas_mostrar = ['sku', 'precio_maestro', 'precio_web', 'variacion_precio_%', 
                            'precio_ok', 'stock_web', 'requiere_accion']
         
+        # Agregar columna de error si existe
+        if 'error_scraping' in df_mostrar.columns:
+            columnas_mostrar.append('error_scraping')
+        
+        # Agregar URL para debug
+        if st.checkbox("🔧 Mostrar URLs (debug)"):
+            columnas_mostrar.append('url')
+        
         # Asegurar que las columnas existan
         columnas_existentes = [col for col in columnas_mostrar if col in df_mostrar.columns]
         
@@ -796,9 +804,21 @@ with tab2:
         df_display = df_mostrar[columnas_existentes].copy()
         
         # Reemplazar NaN con valores por defecto antes de formatear
-        df_display['precio_maestro'] = df_display.get('precio_maestro', pd.Series()).fillna(0)
-        df_display['precio_web'] = df_display.get('precio_web', pd.Series()).fillna(0)
-        df_display['variacion_precio_%'] = df_display.get('variacion_precio_%', pd.Series()).fillna(0)
+        if 'precio_maestro' in df_display.columns:
+            df_display['precio_maestro'] = df_display['precio_maestro'].fillna(0)
+        if 'precio_web' in df_display.columns:
+            df_display['precio_web'] = df_display['precio_web'].fillna(0)
+        if 'variacion_precio_%' in df_display.columns:
+            df_display['variacion_precio_%'] = df_display['variacion_precio_%'].fillna(0)
+        
+        # Mostrar resumen de errores si existen
+        if 'error_scraping' in df_display.columns:
+            errores_unicos = df_display[df_display['error_scraping'].notna()]['error_scraping'].value_counts()
+            if not errores_unicos.empty:
+                st.warning(f"⚠️ Se encontraron {len(df_display[df_display['error_scraping'].notna()])} errores de scraping")
+                with st.expander("Ver tipos de errores"):
+                    for error, count in errores_unicos.items():
+                        st.write(f"- {error[:100]}... ({count} veces)")
         
         # Mostrar sin formato si hay problemas
         try:
@@ -806,8 +826,11 @@ with tab2:
                 df_display.style.format({
                     'precio_maestro': lambda x: f'${x:,.0f}' if pd.notna(x) and x != 0 else '-',
                     'precio_web': lambda x: f'${x:,.0f}' if pd.notna(x) and x != 0 else '-',
-                    'variacion_precio_%': lambda x: f'{x:.1f}%' if pd.notna(x) else '-'
-                }, na_rep='-'),
+                    'variacion_precio_%': lambda x: f'{x:.1f}%' if pd.notna(x) and x != 0 else '-'
+                }, na_rep='-').applymap(
+                    lambda x: 'background-color: #ffcccc' if x == '-' and x != 0 else '',
+                    subset=['precio_web']
+                ),
                 use_container_width=True,
                 height=400
             )
