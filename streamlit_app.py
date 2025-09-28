@@ -11,9 +11,12 @@ from bs4 import BeautifulSoup
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils.dataframe import dataframe_to_rows
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils.dataframe import dataframe_to_rows
+except ImportError:
+    st.error("Por favor instala openpyxl: pip install openpyxl")
 
 # Configuración de la página
 st.set_page_config(
@@ -247,62 +250,60 @@ def limpiar_y_convertir_precio(valor):
         return np.nan
 
 def crear_excel_formateado(df_results, tienda):
-    """Crea un Excel con formato profesional"""
+    """Crea un Excel con formato profesional - versión simplificada"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    except ImportError:
+        # Si no está instalado openpyxl, devolver Excel simple
+        output = BytesIO()
+        df_results.to_excel(output, index=False)
+        output.seek(0)
+        return output
+    
     output = BytesIO()
     
     # Crear workbook
     wb = Workbook()
     ws = wb.active
-    ws.title = "Resultados Auditoría"
+    ws.title = "Resultados"
     
-    # Renombrar columnas para mejor presentación
-    columnas_renombradas = {
-        'sku': 'SKU',
-        'precio_maestro': 'Precio Correcto',
-        'precio_web': 'Precio en Web',
-        'variacion_precio_%': 'Variación %',
-        'precio_ok': 'Precio OK',
-        'stock_maestro': 'Stock Esperado',
-        'stock_web': 'Stock en Web',
-        'requiere_accion': 'Requiere Acción',
-        'url': 'URL',
-        'error_scraping': 'Error',
-        'timestamp': 'Fecha/Hora'
-    }
-    
-    # Preparar datos
-    df_export = df_results.copy()
-    df_export = df_export.rename(columns=columnas_renombradas)
-    
-    # Escribir encabezados con formato
-    header_font = Font(bold=True, color="FFFFFF")
-    header_fill = PatternFill(start_color="667EEA", end_color="667EEA", fill_type="solid")
-    header_alignment = Alignment(horizontal="center", vertical="center")
-    
-    # Agregar título
-    ws.merge_cells('A1:K1')
-    ws['A1'] = f'AUDITORÍA DE {tienda.upper()} - {datetime.now().strftime("%d/%m/%Y %H:%M")}'
+    # Título
+    ws['A1'] = f'AUDITORÍA {tienda.upper()} - {datetime.now().strftime("%d/%m/%Y")}'
     ws['A1'].font = Font(bold=True, size=14)
-    ws['A1'].alignment = Alignment(horizontal="center")
+    ws.merge_cells('A1:H1')
     
     # Espacio
     ws.append([])
     
-    # Escribir encabezados
-    headers = list(columnas_renombradas.values())
-    ws.append(headers)
+    # Encabezados
+    columnas = ['SKU', 'Precio Correcto', 'Precio Web', 'Variación %', 
+                'Precio OK', 'Stock Web', 'Requiere Acción', 'URL']
+    ws.append(columnas)
     
-    # Aplicar formato a encabezados
+    # Formato encabezados
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="667EEA", end_color="667EEA", fill_type="solid")
+    
     for cell in ws[3]:
         cell.font = header_font
         cell.fill = header_fill
-        cell.alignment = header_alignment
     
-    # Escribir datos
-    for _, row in df_export.iterrows():
-        ws.append(row.tolist())
+    # Agregar datos
+    for _, row in df_results.iterrows():
+        row_data = [
+            row.get('sku', ''),
+            row.get('precio_maestro', 0),
+            row.get('precio_web', 0),
+            row.get('variacion_precio_%', 0),
+            'Sí' if row.get('precio_ok', False) else 'No',
+            row.get('stock_web', ''),
+            'Sí' if row.get('requiere_accion', False) else 'No',
+            row.get('url', '')
+        ]
+        ws.append(row_data)
     
-    # Aplicar formato condicional a las filas de datos
+    # Aplicar formato básico
     thin_border = Border(
         left=Side(style='thin'),
         right=Side(style='thin'),
@@ -310,84 +311,36 @@ def crear_excel_formateado(df_results, tienda):
         bottom=Side(style='thin')
     )
     
+    # Aplicar bordes y colores
     for row_num in range(4, ws.max_row + 1):
-        for col_num in range(1, ws.max_column + 1):
-            cell = ws.cell(row=row_num, column=col_num)
-            cell.border = thin_border
-            
-            # Formato condicional para columna "Precio OK"
-            if ws.cell(row=3, column=col_num).value == "Precio OK":
-                if cell.value == True:
-                    cell.fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
-                elif cell.value == False:
-                    cell.fill = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
-            
-            # Formato condicional para "Requiere Acción"
-            if ws.cell(row=3, column=col_num).value == "Requiere Acción":
-                if cell.value == True:
-                    cell.fill = PatternFill(start_color="FFD700", end_color="FFD700", fill_type="solid")
-            
-            # Formato para precios
-            if ws.cell(row=3, column=col_num).value in ["Precio Correcto", "Precio en Web"]:
-                if isinstance(cell.value, (int, float)):
-                    cell.number_format = '$#,##0'
-            
-            # Formato para variación
-            if ws.cell(row=3, column=col_num).value == "Variación %":
-                if isinstance(cell.value, (int, float)):
-                    cell.number_format = '0.0"%"'
-                    if abs(cell.value) > 5:  # Si variación > 5%
-                        cell.fill = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
-    
-    # Ajustar ancho de columnas
-    for column in ws.columns:
-        max_length = 0
-        column_letter = column[0].column_letter
-        for cell in column:
+        for col_num in range(1, 9):  # Solo 8 columnas
             try:
-                if cell.value:
-                    max_length = max(max_length, len(str(cell.value)))
+                cell = ws.cell(row=row_num, column=col_num)
+                cell.border = thin_border
+                
+                # Color para Precio OK
+                if col_num == 5:  # Columna de Precio OK
+                    if cell.value == 'Sí':
+                        cell.fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
+                    else:
+                        cell.fill = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
+                
+                # Color para Requiere Acción
+                if col_num == 7:  # Columna Requiere Acción
+                    if cell.value == 'Sí':
+                        cell.fill = PatternFill(start_color="FFD700", end_color="FFD700", fill_type="solid")
             except:
                 pass
-        adjusted_width = min(max_length + 2, 50)
-        ws.column_dimensions[column_letter].width = adjusted_width
     
-    # Agregar hoja de resumen
-    ws_resumen = wb.create_sheet("Resumen")
-    
-    # Título del resumen
-    ws_resumen.merge_cells('A1:B1')
-    ws_resumen['A1'] = 'RESUMEN EJECUTIVO'
-    ws_resumen['A1'].font = Font(bold=True, size=14)
-    ws_resumen['A1'].alignment = Alignment(horizontal="center")
-    
-    # Métricas del resumen
-    resumen_data = [
-        ['', ''],
-        ['Métrica', 'Valor'],
-        ['Total de productos auditados', len(df_results)],
-        ['Productos con precio correcto', len(df_results[df_results['precio_ok'] == True])],
-        ['Productos con error de precio', len(df_results[(df_results['precio_ok'] == False) & df_results['precio_web'].notna()])],
-        ['Productos sin stock', len(df_results[df_results['stock_web'] == 'No'])],
-        ['Productos que requieren acción', len(df_results[df_results['requiere_accion'] == True])],
-        ['', ''],
-        ['Tasa de precisión', f"{(len(df_results[df_results['precio_ok'] == True]) / len(df_results) * 100):.1f}%" if len(df_results) > 0 else "0%"]
-    ]
-    
-    for row in resumen_data:
-        ws_resumen.append(row)
-    
-    # Formato para el resumen
-    for row_num in range(2, 4):
-        for col_num in range(1, 3):
-            cell = ws_resumen.cell(row=row_num, column=col_num)
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = header_alignment
-    
-    # Ajustar anchos en resumen
-    ws_resumen.column_dimensions['A'].width = 30
-    ws_resumen.column_dimensions['B'].width = 20
+    # Ajustar anchos de columna de forma simple
+    ws.column_dimensions['A'].width = 15  # SKU
+    ws.column_dimensions['B'].width = 15  # Precio Correcto
+    ws.column_dimensions['C'].width = 15  # Precio Web
+    ws.column_dimensions['D'].width = 12  # Variación
+    ws.column_dimensions['E'].width = 10  # Precio OK
+    ws.column_dimensions['F'].width = 12  # Stock Web
+    ws.column_dimensions['G'].width = 15  # Requiere Acción
+    ws.column_dimensions['H'].width = 40  # URL
     
     # Guardar
     wb.save(output)
