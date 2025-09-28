@@ -697,4 +697,175 @@ with tab3:
             )
         
         with col2:
-            disponibilidad = (len(df[df['stock_web'] == 'Si']) / len(df) * 100
+            disponibilidad = (len(df[df['stock_web'] == 'Si']) / len(df) * 100) if len(df) > 0 else 0
+            st.metric(
+                "Disponibilidad",
+                f"{disponibilidad:.1f}%",
+                delta="Óptimo" if disponibilidad > 95 else "Aceptable" if disponibilidad > 85 else "Crítico"
+            )
+        
+        with col3:
+            variacion_promedio = df['variacion_precio_%'].abs().mean() if not df.empty else 0
+            st.metric(
+                "Variación Promedio",
+                f"{variacion_promedio:.1f}%",
+                delta="Excelente" if variacion_promedio < 2 else "Bueno" if variacion_promedio < 5 else "Alto"
+            )
+        
+        with col4:
+            health_score = ((accuracy * 0.6) + (disponibilidad * 0.4))
+            st.metric(
+                "Health Score",
+                f"{health_score:.0f}/100",
+                delta="⭐" if health_score > 90 else "✓" if health_score > 75 else "⚠️"
+            )
+        
+        # Gráficos
+        st.markdown("---")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Gráfico de distribución de variaciones
+            fig_hist = px.histogram(
+                df[df['variacion_precio_%'].notna()],
+                x='variacion_precio_%',
+                title='Distribución de Variaciones de Precio',
+                labels={'variacion_precio_%': 'Variación (%)', 'count': 'Cantidad'},
+                color_discrete_sequence=['#764ba2']
+            )
+            fig_hist.add_vline(x=-price_threshold, line_dash="dash", line_color="red")
+            fig_hist.add_vline(x=price_threshold, line_dash="dash", line_color="red")
+            st.plotly_chart(fig_hist, use_container_width=True)
+        
+        with col2:
+            # Gráfico de pie de estados
+            estados = pd.DataFrame({
+                'Estado': ['Precio OK', 'Error Precio', 'Sin Stock', 'OK Total'],
+                'Cantidad': [
+                    len(df[df['precio_ok']]),
+                    len(df[~df['precio_ok']]),
+                    len(df[df['stock_web'] == 'No']),
+                    len(df[(df['precio_ok']) & (df['stock_web'] != 'No')])
+                ]
+            })
+            
+            fig_pie = px.pie(
+                estados,
+                values='Cantidad',
+                names='Estado',
+                title='Estado de Productos',
+                color_discrete_map={
+                    'OK Total': '#00CC00',
+                    'Precio OK': '#90EE90',
+                    'Error Precio': '#FFA500',
+                    'Sin Stock': '#FF4444'
+                }
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        # Top productos con mayor variación
+        st.markdown("---")
+        st.subheader("🔴 Top 10 Productos con Mayor Variación")
+        
+        top_variaciones = df.nlargest(10, 'variacion_precio_%')[['sku', 'precio_maestro', 'precio_web', 'variacion_precio_%', 'url']]
+        
+        st.dataframe(
+            top_variaciones.style.format({
+                'precio_maestro': '${:,.0f}',
+                'precio_web': '${:,.0f}',
+                'variacion_precio_%': '{:.1f}%'
+            }).background_gradient(subset=['variacion_precio_%'], cmap='Reds'),
+            use_container_width=True
+        )
+        
+        # Timeline de auditoría
+        if 'timestamp' in df.columns:
+            st.markdown("---")
+            st.subheader("📅 Timeline de Auditoría")
+            st.info(f"Última actualización: {df['timestamp'].iloc[0] if not df.empty else 'N/A'}")
+    
+    else:
+        st.info("👆 Primero ejecuta una auditoría para ver el dashboard")
+
+with tab4:
+    st.markdown("### ⚙️ Configuración de Scraping")
+    
+    st.warning("⚠️ Esta sección es para usuarios avanzados")
+    
+    # Mostrar configuración actual
+    st.subheader(f"Configuración actual para {selected_store}")
+    
+    if selected_store in TIENDAS_CONFIG:
+        config = TIENDAS_CONFIG[selected_store]
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Selectores de Precio:**")
+            for selector in config['selector_precio']:
+                st.code(selector)
+            
+            st.markdown("**Formato de Precio:**")
+            st.info(config['formato_precio'])
+        
+        with col2:
+            st.markdown("**Selectores de Stock:**")
+            for selector in config['selector_stock']:
+                st.code(selector)
+            
+            st.markdown("**URL Base:**")
+            st.info(config['base_url'])
+    
+    # Instrucciones para agregar nuevas tiendas
+    with st.expander("📚 Cómo agregar una nueva tienda"):
+        st.markdown("""
+        Para agregar una nueva tienda, necesitas:
+        
+        1. **Inspeccionar el HTML** de la página del producto
+        2. **Identificar los selectores CSS** para precio y stock
+        3. **Determinar el formato** del precio (con o sin puntos/comas)
+        4. **Agregar la configuración** al diccionario TIENDAS_CONFIG
+        
+        Ejemplo:
+        ```python
+        "NuevaTienda": {
+            "base_url": "https://nuevatienda.com",
+            "selector_precio": ["span.price", "div.precio"],
+            "selector_stock": ["span.stock"],
+            "formato_precio": "con_puntos",
+            "columna_url": "URL NuevaTienda"
+        }
+        ```
+        """)
+    
+    # Test de scraping
+    st.markdown("---")
+    st.subheader("🧪 Test de Scraping")
+    
+    test_url = st.text_input("URL de prueba:", placeholder="https://tienda.com/producto")
+    
+    if st.button("Probar Scraping") and test_url:
+        with st.spinner("Probando..."):
+            scraper = WebScraper(TIENDAS_CONFIG[selected_store])
+            resultado = scraper.scrape_url(test_url)
+            
+            if resultado['error']:
+                st.error(f"Error: {resultado['error']}")
+            else:
+                st.success("✅ Scraping exitoso!")
+                st.json(resultado)
+
+# Footer
+st.markdown("---")
+st.markdown(
+    f"""
+    <div style='text-align: center; color: gray; padding: 20px;'>
+        <p>🤖 Sistema de Auditoría Automática con Web Scraping v1.0 | 
+        {selected_store} | 
+        {datetime.now().strftime("%d/%m/%Y %H:%M")}</p>
+        <p style='font-size: 12px;'>⚡ Powered by BeautifulSoup + Requests</p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
