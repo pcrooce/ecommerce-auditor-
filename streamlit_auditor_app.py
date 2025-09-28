@@ -6,12 +6,16 @@ import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
 import time
+import requests
+from bs4 import BeautifulSoup
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
 
 # Configuración de la página
 st.set_page_config(
-    page_title="Auditor de Publicaciones - Sistema Bancario",
-    page_icon="🏦",
+    page_title="Auditor Automático de Publicaciones",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -32,106 +36,257 @@ st.markdown("""
         border-radius: 5px;
         margin: 10px 0px;
     }
-    .bank-header {
-        background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    .audit-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 2rem;
         border-radius: 10px;
         color: white;
         margin-bottom: 2rem;
+    }
+    .price-ok {
+        color: green;
+        font-weight: bold;
+    }
+    .price-error {
+        color: red;
+        font-weight: bold;
     }
     </style>
     """, unsafe_allow_html=True)
 
 # Título principal
 st.markdown("""
-    <div class="bank-header">
-        <h1 style="text-align: center; color: white;">🏦 Sistema de Auditoría de Publicaciones</h1>
+    <div class="audit-header">
+        <h1 style="text-align: center; color: white;">🤖 Sistema de Auditoría Automática</h1>
         <p style="text-align: center; color: white; margin-top: 10px;">
-            Control y Validación de Catálogos para Tiendas Bancarias y Retail
+            Web Scraping Automático de Precios y Stock en Tiendas
         </p>
     </div>
     """, unsafe_allow_html=True)
 
 # Inicializar estado de sesión
-if 'audit_completed' not in st.session_state:
-    st.session_state.audit_completed = False
-if 'results' not in st.session_state:
-    st.session_state.results = None
-if 'selected_store' not in st.session_state:
-    st.session_state.selected_store = None
+if 'audit_results' not in st.session_state:
+    st.session_state.audit_results = None
+if 'scraping_progress' not in st.session_state:
+    st.session_state.scraping_progress = 0
 
-# CONFIGURACIÓN DE TIENDAS Y FORMATOS
+# CONFIGURACIÓN DE TIENDAS Y SCRAPING
 TIENDAS_CONFIG = {
-    "APER": {
-        "tiendas": ["ICBC", "Supervielle", "Galicia"],
-        "formato": "APER",
-        "columnas_requeridas": {
-            'SKU padre': 'sku_padre',
-            'SKU': 'sku',
-            'Titulo de publicacion': 'titulo',
-            'Precio': 'precio',
-            'Stock': 'stock',
-            'Pausar': 'pausar',
-            'Cuotas': 'cuotas',
-            'Cuotas sin interes': 'cuotas_sin_interes'
-        },
-        "validaciones": {
-            "precio_formato": "sin_decimales",  # Los precios van sin decimales
-            "sku_formato": "numerico",
-            "pausar_valores": ["SI", "NO"],
-            "titulo_max_length": 60
-        }
+    "Tienda Ciudad": {
+        "base_url": "https://tiendaciudad.com.ar",
+        "selector_precio": [
+            "span.price",
+            "span.precio-actual",
+            "div.price-now",
+            "meta[property='product:price:amount']"
+        ],
+        "selector_stock": [
+            "span.stock-disponible",
+            "div.availability",
+            "meta[property='product:availability']"
+        ],
+        "formato_precio": "con_puntos",  # 15.000,00
+        "columna_url": "URL Ciudad"
     },
-    "Ciudad": {
-        "tiendas": ["Tienda Ciudad"],
-        "formato": "Ciudad",
-        "columnas_requeridas": {
-            'Identificador de URL': 'url_id',
-            'Nombre': 'nombre',
-            'Identificador de producto de item': 'product_item_id',
-            'Precio': 'precio',
-            'Precio de lista': 'precio_lista',
-            'Disponibilidad': 'disponibilidad',
-            'Marca': 'marca'
-        },
-        "validaciones": {
-            "precio_formato": "con_decimales",
-            "disponibilidad_valores": ["in stock", "out of stock"],
-            "url_formato": "alphanumerico_guiones"
-        }
+    "ICBC": {
+        "base_url": "https://mall.icbc.com.ar",
+        "selector_precio": [
+            "span.price-now",
+            "div.precio-final",
+            "span.price"
+        ],
+        "selector_stock": [
+            "span.stock-qty",
+            "div.stock-disponible"
+        ],
+        "formato_precio": "sin_puntos",  # 15000
+        "columna_url": "URL ICBC"
     },
-    "BNA": {
-        "tiendas": ["Tienda BNA"],
-        "formato": "PorDefinir",
-        "columnas_requeridas": {},
-        "validaciones": {}
+    "Supervielle": {
+        "base_url": "https://tienda.supervielle.com.ar",
+        "selector_precio": [
+            "span.price",
+            "div.precio"
+        ],
+        "selector_stock": [
+            "div.stock",
+            "span.disponibilidad"
+        ],
+        "formato_precio": "sin_puntos",
+        "columna_url": "URL Supervielle"
     },
-    "Retail": {
-        "tiendas": ["Fravega", "Megatone"],
-        "formato": "PorDefinir",
-        "columnas_requeridas": {},
-        "validaciones": {}
+    "Galicia": {
+        "base_url": "https://tienda.galicia.com.ar",
+        "selector_precio": [
+            "span.precio",
+            "div.price-box"
+        ],
+        "selector_stock": [
+            "span.stock",
+            "div.availability"
+        ],
+        "formato_precio": "sin_puntos",
+        "columna_url": "URL Galicia"
     },
-    "Bapro": {
-        "tiendas": ["Banco Provincia (Bapro)"],
-        "formato": "PorDefinir",
-        "columnas_requeridas": {},
-        "validaciones": {}
+    "Tienda BNA": {
+        "base_url": "https://tiendabna.com.ar",
+        "selector_precio": ["span.price"],
+        "selector_stock": ["span.stock"],
+        "formato_precio": "con_puntos",
+        "columna_url": "URL BNA"
     },
-    "OnCity": {
-        "tiendas": ["OnCity"],
-        "formato": "PorDefinir",
-        "columnas_requeridas": {},
-        "validaciones": {}
+    "Fravega": {
+        "base_url": "https://www.fravega.com",
+        "selector_precio": [
+            "span.PriceLayout__Main",
+            "span[data-test-id='price-value']"
+        ],
+        "selector_stock": ["button.AddToCart"],
+        "formato_precio": "sin_puntos",
+        "columna_url": "URL Fravega"
+    },
+    "Megatone": {
+        "base_url": "https://www.megatone.net",
+        "selector_precio": ["span.price"],
+        "selector_stock": ["div.stock"],
+        "formato_precio": "sin_puntos",
+        "columna_url": "URL Megatone"
     }
 }
 
-# Lista plana de todas las tiendas
-TODAS_LAS_TIENDAS = []
-for config in TIENDAS_CONFIG.values():
-    TODAS_LAS_TIENDAS.extend(config["tiendas"])
+# Lista de todas las tiendas
+TODAS_LAS_TIENDAS = list(TIENDAS_CONFIG.keys())
 
-# Sidebar para configuración
+class WebScraper:
+    """Clase para hacer web scraping de las tiendas"""
+    
+    def __init__(self, tienda_config):
+        self.config = tienda_config
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        })
+    
+    def limpiar_precio(self, precio_texto, formato):
+        """Limpia y convierte el precio a número"""
+        if not precio_texto:
+            return None
+        
+        # Eliminar símbolos de moneda y espacios
+        precio_texto = re.sub(r'[$\s]', '', precio_texto)
+        
+        if formato == "con_puntos":
+            # Formato: 15.000,00 o 15.000
+            precio_texto = precio_texto.replace('.', '').replace(',', '.')
+        else:
+            # Formato: 15000 o 15000.00
+            precio_texto = precio_texto.replace(',', '')
+        
+        try:
+            return float(re.sub(r'[^\d.]', '', precio_texto))
+        except:
+            return None
+    
+    def scrape_url(self, url):
+        """Scrapea una URL específica"""
+        resultado = {
+            'url': url,
+            'precio_web': None,
+            'stock_web': None,
+            'error': None,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        try:
+            response = self.session.get(url, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Buscar precio
+            for selector in self.config['selector_precio']:
+                if selector.startswith('meta'):
+                    # Buscar en meta tags
+                    meta = soup.find('meta', property=selector.split("'")[1])
+                    if meta and meta.get('content'):
+                        precio_texto = meta['content']
+                        resultado['precio_web'] = self.limpiar_precio(precio_texto, self.config['formato_precio'])
+                        break
+                else:
+                    elemento = soup.select_one(selector)
+                    if elemento:
+                        precio_texto = elemento.get_text(strip=True)
+                        resultado['precio_web'] = self.limpiar_precio(precio_texto, self.config['formato_precio'])
+                        break
+            
+            # Buscar stock
+            for selector in self.config['selector_stock']:
+                if selector.startswith('meta'):
+                    meta = soup.find('meta', property=selector.split("'")[1])
+                    if meta:
+                        content = meta.get('content', '').lower()
+                        resultado['stock_web'] = 'Si' if 'instock' in content or 'available' in content else 'No'
+                        break
+                else:
+                    elemento = soup.select_one(selector)
+                    if elemento:
+                        texto = elemento.get_text(strip=True).lower()
+                        if 'sin stock' in texto or 'agotado' in texto or 'no disponible' in texto:
+                            resultado['stock_web'] = 'No'
+                        elif 'disponible' in texto or 'stock' in texto:
+                            resultado['stock_web'] = 'Si'
+                        else:
+                            # Si existe el botón de agregar al carrito, hay stock
+                            resultado['stock_web'] = 'Si' if elemento else 'No'
+                        break
+            
+            # Si no se encontró stock, buscar botón de compra
+            if not resultado['stock_web']:
+                buy_button = soup.select_one('button[class*="add"], button[class*="comprar"], button[class*="cart"]')
+                resultado['stock_web'] = 'Si' if buy_button else 'Desconocido'
+            
+        except requests.exceptions.RequestException as e:
+            resultado['error'] = f"Error de conexión: {str(e)}"
+        except Exception as e:
+            resultado['error'] = f"Error: {str(e)}"
+        
+        return resultado
+
+def realizar_scraping(df_tienda, tienda_config, progress_bar, status_text):
+    """Realiza el scraping de todas las URLs de una tienda"""
+    scraper = WebScraper(tienda_config)
+    resultados = []
+    total_urls = len(df_tienda)
+    
+    # Usar ThreadPoolExecutor para scraping paralelo (más rápido)
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(scraper.scrape_url, row['url']): idx 
+                  for idx, row in df_tienda.iterrows() if pd.notna(row.get('url'))}
+        
+        completed = 0
+        for future in as_completed(futures):
+            completed += 1
+            idx = futures[future]
+            
+            # Actualizar progreso
+            progress = int((completed / total_urls) * 100)
+            progress_bar.progress(progress)
+            status_text.text(f"Escaneando URL {completed}/{total_urls}...")
+            
+            try:
+                resultado = future.result()
+                resultado['idx'] = idx
+                resultados.append(resultado)
+            except Exception as e:
+                resultados.append({
+                    'idx': idx,
+                    'url': df_tienda.loc[idx, 'url'],
+                    'error': str(e)
+                })
+    
+    return resultados
+
+# Sidebar
 with st.sidebar:
     st.header("⚙️ Configuración de Auditoría")
     
@@ -140,38 +295,11 @@ with st.sidebar:
     selected_store = st.selectbox(
         "Tienda a auditar:",
         TODAS_LAS_TIENDAS,
-        help="Selecciona la tienda que deseas auditar"
+        help="Selecciona la tienda que deseas auditar automáticamente"
     )
     
-    st.session_state.selected_store = selected_store
-    
-    # Identificar formato de la tienda seleccionada
-    formato_tienda = None
-    config_tienda = None
-    for formato, config in TIENDAS_CONFIG.items():
-        if selected_store in config["tiendas"]:
-            formato_tienda = config["formato"]
-            config_tienda = config
-            break
-    
-    # Mostrar información del formato
-    if formato_tienda:
-        st.markdown("---")
-        st.info(f"📋 **Formato:** {formato_tienda}")
-        
-        if formato_tienda == "APER":
-            st.success("✅ Formato APER configurado")
-            st.caption("Columnas: SKU padre, SKU, Título, Precio (sin decimales), etc.")
-        elif formato_tienda == "Ciudad":
-            st.success("✅ Formato Ciudad configurado")
-            st.caption("Columnas: URL, Nombre, Product Item ID, Precio (con decimales), etc.")
-        else:
-            st.warning("⚠️ Formato pendiente de configuración")
-            st.caption("Esta tienda aún no tiene formato definido")
-    
+    # Configuración de umbrales
     st.markdown("---")
-    
-    # Parámetros de auditoría
     st.subheader("📊 Parámetros de Control")
     
     price_threshold = st.slider(
@@ -179,753 +307,394 @@ with st.sidebar:
         min_value=1,
         max_value=20,
         value=5,
-        help="Diferencia máxima aceptable"
+        help="Diferencia máxima aceptable entre precio web y base de datos"
     )
     
-    stock_minimum = st.number_input(
-        "Stock mínimo recomendado",
-        min_value=1,
-        max_value=100,
-        value=5,
-        help="Cantidad mínima antes de alerta"
+    max_productos = st.number_input(
+        "Máximo de productos a escanear",
+        min_value=10,
+        max_value=1000,
+        value=100,
+        help="Limitar cantidad para pruebas rápidas"
     )
     
     st.markdown("---")
     
-    # Información de ayuda específica por formato
-    st.subheader("📚 Formato Esperado")
+    # Información de la tienda seleccionada
+    if selected_store in TIENDAS_CONFIG:
+        config = TIENDAS_CONFIG[selected_store]
+        st.info(f"""
+        📋 **Configuración de {selected_store}**
+        
+        • Base URL: {config['base_url']}
+        • Columna URL: {config['columna_url']}
+        • Formato precio: {config['formato_precio']}
+        """)
     
-    if formato_tienda == "APER":
-        with st.expander("Ver formato APER"):
-            st.write("""
-            **Columnas requeridas:**
-            - `SKU padre`: Código padre del producto
-            - `SKU`: Código único del producto
-            - `Titulo de publicacion`: Max 60 caracteres
-            - `Precio`: Sin decimales (ej: 15000)
-            - `Stock`: Cantidad disponible
-            - `Pausar`: SI/NO
-            - `Cuotas`: Cantidad de cuotas
-            - `Cuotas sin interes`: Cantidad
-            """)
-    
-    elif formato_tienda == "Ciudad":
-        with st.expander("Ver formato Ciudad"):
-            st.write("""
-            **Columnas requeridas:**
-            - `Identificador de URL`: Slug del producto
-            - `Nombre`: Nombre del producto
-            - `Identificador de producto de item`: ID único
-            - `Precio`: Con decimales (ej: 15000.00)
-            - `Precio de lista`: Precio sin descuento
-            - `Disponibilidad`: "in stock" / "out of stock"
-            - `Marca`: Marca del producto
-            """)
-    
+    # Modo de operación
     st.markdown("---")
-    st.success(f"🏦 **Auditando:** {selected_store}")
-
-# Funciones específicas para cada formato
-def validar_formato_aper(df):
-    """Validar formato APER (ICBC, Supervielle, Galicia)"""
-    errores = []
-    advertencias = []
+    st.subheader("🔧 Modo de Operación")
     
-    # Verificar columnas requeridas
-    columnas_requeridas = ['SKU padre', 'SKU', 'Titulo de publicacion', 'Precio', 'Stock', 'Pausar']
-    columnas_faltantes = [col for col in columnas_requeridas if col not in df.columns]
-    
-    if columnas_faltantes:
-        errores.append(f"Columnas faltantes: {', '.join(columnas_faltantes)}")
-    
-    # Validar formato de precio (sin decimales)
-    if 'Precio' in df.columns:
-        precios_con_decimal = df[df['Precio'].astype(str).str.contains(r'\.')]['SKU'].tolist()
-        if precios_con_decimal:
-            advertencias.append(f"Precios con decimales detectados (deben ser enteros): {len(precios_con_decimal)} productos")
-    
-    # Validar valores de Pausar
-    if 'Pausar' in df.columns:
-        valores_invalidos = df[~df['Pausar'].isin(['SI', 'NO'])]['SKU'].tolist()
-        if valores_invalidos:
-            errores.append(f"Valores inválidos en columna 'Pausar': {len(valores_invalidos)} productos")
-    
-    # Validar longitud de títulos
-    if 'Titulo de publicacion' in df.columns:
-        titulos_largos = df[df['Titulo de publicacion'].str.len() > 60]['SKU'].tolist()
-        if titulos_largos:
-            advertencias.append(f"Títulos muy largos (>60 caracteres): {len(titulos_largos)} productos")
-    
-    return errores, advertencias
-
-def validar_formato_ciudad(df):
-    """Validar formato Ciudad"""
-    errores = []
-    advertencias = []
-    
-    # Verificar columnas requeridas
-    columnas_requeridas = ['Identificador de URL', 'Nombre', 'Precio', 'Disponibilidad']
-    columnas_faltantes = [col for col in columnas_requeridas if col not in df.columns]
-    
-    if columnas_faltantes:
-        errores.append(f"Columnas faltantes: {', '.join(columnas_faltantes)}")
-    
-    # Validar disponibilidad
-    if 'Disponibilidad' in df.columns:
-        valores_validos = ['in stock', 'out of stock']
-        valores_invalidos = df[~df['Disponibilidad'].isin(valores_validos)]
-        if not valores_invalidos.empty:
-            errores.append(f"Valores inválidos en 'Disponibilidad': {len(valores_invalidos)} productos")
-    
-    # Validar formato de URL
-    if 'Identificador de URL' in df.columns:
-        urls_invalidas = df[df['Identificador de URL'].str.contains(r'[^a-z0-9\-]', na=False)]
-        if not urls_invalidas.empty:
-            advertencias.append(f"URLs con caracteres especiales: {len(urls_invalidas)} productos")
-    
-    return errores, advertencias
-
-def perform_audit_bancaria(store_df, db_df, store_name, formato_tienda, config_tienda, price_threshold, stock_minimum):
-    """Realizar auditoría específica para tiendas bancarias"""
-    results = {
-        'store_name': store_name,
-        'formato': formato_tienda,
-        'audit_date': datetime.now().strftime('%Y-%m-%d %H:%M'),
-        'summary': {},
-        'validacion_formato': {'errores': [], 'advertencias': []},
-        'price_issues': [],
-        'stock_issues': [],
-        'missing_products': [],
-        'format_issues': [],
-        'recommendations': []
-    }
-    
-    # Barra de progreso
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    # 1. Validación de formato según tienda
-    status_text.text(f"Validando formato {formato_tienda}...")
-    progress_bar.progress(20)
-    
-    if formato_tienda == "APER":
-        errores, advertencias = validar_formato_aper(store_df)
-        results['validacion_formato']['errores'] = errores
-        results['validacion_formato']['advertencias'] = advertencias
-    elif formato_tienda == "Ciudad":
-        errores, advertencias = validar_formato_ciudad(store_df)
-        results['validacion_formato']['errores'] = errores
-        results['validacion_formato']['advertencias'] = advertencias
-    
-    # 2. Análisis general
-    status_text.text(f"Analizando catálogo de {store_name}...")
-    progress_bar.progress(40)
-    
-    results['summary']['total_productos_tienda'] = len(store_df)
-    results['summary']['total_productos_bd'] = len(db_df)
-    
-    # 3. Comparación con base de datos (adaptado por formato)
-    status_text.text("Comparando con base de datos maestra...")
-    progress_bar.progress(60)
-    
-    # Identificar columna de ID según formato
-    if formato_tienda == "APER":
-        id_col_tienda = 'SKU'
-        price_col_tienda = 'Precio'
-        stock_col_tienda = 'Stock'
-    elif formato_tienda == "Ciudad":
-        id_col_tienda = 'Identificador de producto de item'
-        price_col_tienda = 'Precio'
-        stock_col_tienda = None  # Ciudad usa "Disponibilidad" en lugar de stock numérico
-    else:
-        # Formato genérico
-        id_col_tienda = next((col for col in store_df.columns if 'sku' in col.lower() or 'id' in col.lower()), None)
-        price_col_tienda = next((col for col in store_df.columns if 'precio' in col.lower() or 'price' in col.lower()), None)
-        stock_col_tienda = next((col for col in store_df.columns if 'stock' in col.lower()), None)
-    
-    # Buscar columna equivalente en BD
-    id_col_bd = next((col for col in db_df.columns if 'sku' in col.lower() or 'id' in col.lower()), None)
-    price_col_bd = next((col for col in db_df.columns if 'precio' in col.lower() or 'price' in col.lower()), None)
-    
-    if id_col_tienda and id_col_bd and id_col_tienda in store_df.columns and id_col_bd in db_df.columns:
-        # Merge de dataframes
-        merged = pd.merge(
-            store_df[[col for col in [id_col_tienda, price_col_tienda, stock_col_tienda] if col and col in store_df.columns]], 
-            db_df[[col for col in [id_col_bd, price_col_bd] if col and col in db_df.columns]], 
-            left_on=id_col_tienda,
-            right_on=id_col_bd,
-            how='outer',
-            indicator=True
-        )
-        
-        # Productos no encontrados
-        only_in_store = merged[merged['_merge'] == 'left_only']
-        only_in_db = merged[merged['_merge'] == 'right_only']
-        
-        results['summary']['productos_no_en_bd'] = len(only_in_store)
-        results['summary']['productos_no_publicados'] = len(only_in_db)
-        results['missing_products'] = only_in_store[id_col_tienda].head(100).tolist()
-        
-        # Comparación de precios
-        if price_col_tienda and price_col_bd:
-            both = merged[merged['_merge'] == 'both'].copy()
-            
-            # Convertir precios según formato
-            if formato_tienda == "APER":
-                # APER usa precios sin decimales
-                both[price_col_tienda] = pd.to_numeric(both[price_col_tienda], errors='coerce')
-                both[price_col_bd] = pd.to_numeric(both[price_col_bd], errors='coerce')
-            elif formato_tienda == "Ciudad":
-                # Ciudad usa precios con decimales
-                both[price_col_tienda] = pd.to_numeric(both[price_col_tienda], errors='coerce')
-                both[price_col_bd] = pd.to_numeric(both[price_col_bd], errors='coerce')
-            
-            # Calcular variación
-            both['variacion_%'] = ((both[price_col_tienda] - both[price_col_bd]) / both[price_col_bd] * 100).abs()
-            
-            # Identificar problemas
-            price_issues = both[both['variacion_%'] > price_threshold].copy()
-            if not price_issues.empty:
-                price_issues['diferencia_$'] = price_issues[price_col_tienda] - price_issues[price_col_bd]
-                results['price_issues'] = price_issues[[id_col_tienda, price_col_tienda, price_col_bd, 'variacion_%', 'diferencia_$']].head(100).to_dict('records')
-            
-            results['summary']['productos_con_precio_incorrecto'] = len(price_issues)
-    
-    # 4. Análisis específico por formato
-    status_text.text(f"Aplicando validaciones específicas de {formato_tienda}...")
-    progress_bar.progress(80)
-    
-    if formato_tienda == "APER":
-        # Verificar productos pausados
-        if 'Pausar' in store_df.columns:
-            pausados = store_df[store_df['Pausar'] == 'SI']
-            results['summary']['productos_pausados'] = len(pausados)
-            
-            if len(pausados) > 0:
-                results['recommendations'].append({
-                    'prioridad': 'MEDIA',
-                    'tipo': 'Estado',
-                    'accion': f"Revisar {len(pausados)} productos pausados en {store_name}"
-                })
-        
-        # Verificar stock
-        if stock_col_tienda and stock_col_tienda in store_df.columns:
-            sin_stock = store_df[store_df[stock_col_tienda] == 0]
-            stock_bajo = store_df[store_df[stock_col_tienda] < stock_minimum]
-            
-            results['summary']['productos_sin_stock'] = len(sin_stock)
-            results['summary']['productos_stock_bajo'] = len(stock_bajo)
-            
-            if len(sin_stock) > 0:
-                results['stock_issues'] = sin_stock[id_col_tienda].head(50).tolist()
-                results['recommendations'].append({
-                    'prioridad': 'ALTA',
-                    'tipo': 'Stock',
-                    'accion': f"URGENTE: Reponer {len(sin_stock)} productos sin stock"
-                })
-    
-    elif formato_tienda == "Ciudad":
-        # Verificar disponibilidad
-        if 'Disponibilidad' in store_df.columns:
-            sin_stock = store_df[store_df['Disponibilidad'] == 'out of stock']
-            results['summary']['productos_sin_stock'] = len(sin_stock)
-            
-            if len(sin_stock) > 0:
-                results['recommendations'].append({
-                    'prioridad': 'ALTA',
-                    'tipo': 'Disponibilidad',
-                    'accion': f"Actualizar {len(sin_stock)} productos marcados como 'out of stock'"
-                })
-    
-    # 5. Generar recomendaciones finales
-    status_text.text("Generando recomendaciones...")
-    progress_bar.progress(90)
-    
-    # Agregar recomendaciones basadas en errores de formato
-    if results['validacion_formato']['errores']:
-        results['recommendations'].insert(0, {
-            'prioridad': 'CRITICA',
-            'tipo': 'Formato',
-            'accion': f"CORREGIR ERRORES DE FORMATO: {len(results['validacion_formato']['errores'])} problemas críticos detectados"
-        })
-    
-    # Calcular health score
-    total_productos = results['summary'].get('total_productos_tienda', 1)
-    problemas = (
-        len(results['validacion_formato']['errores']) * 10 +  # Errores de formato son críticos
-        results['summary'].get('productos_sin_stock', 0) * 2 +
-        results['summary'].get('productos_con_precio_incorrecto', 0) +
-        len(results['validacion_formato']['advertencias']) * 0.5
+    modo_operacion = st.radio(
+        "Seleccionar modo:",
+        ["Auditoría Rápida (primeros 10)", "Auditoría Completa", "Modo Prueba (simular)"],
+        help="Rápida para verificar que funcione, Completa para todos los productos"
     )
-    
-    health_score = max(0, 100 - (problemas / total_productos * 100))
-    results['summary']['health_score'] = round(health_score, 1)
-    
-    progress_bar.progress(100)
-    time.sleep(0.5)
-    progress_bar.empty()
-    status_text.empty()
-    
-    return results
 
 # Área principal
-st.header(f"📋 Auditoría de {selected_store}")
+st.header(f"🔍 Auditoría Automática - {selected_store}")
 
-# Información del formato
-if formato_tienda and formato_tienda != "PorDefinir":
-    st.info(f"📐 Esta tienda utiliza el formato **{formato_tienda}**")
-elif formato_tienda == "PorDefinir":
-    st.warning("⚠️ Esta tienda aún no tiene un formato definido. La auditoría funcionará en modo genérico.")
-
-# Tabs principales
-tab1, tab2, tab3, tab4 = st.tabs(["📁 Carga de Datos", "📊 Resultados", "📈 Validación de Formato", "📚 Documentación"])
+# Tabs
+tab1, tab2, tab3, tab4 = st.tabs(["📁 Cargar y Ejecutar", "📊 Resultados", "📈 Dashboard", "⚙️ Configuración"])
 
 with tab1:
-    st.markdown("### Cargar archivos para auditoría")
+    st.markdown("### 1️⃣ Cargar Archivo Maestro")
     
-    col1, col2 = st.columns(2)
+    # Cargar archivo
+    uploaded_file = st.file_uploader(
+        "Cargar Auditoria General.xlsx",
+        type=['xlsx', 'xls'],
+        help="Tu archivo maestro con SKUs, URLs, precios y stock correctos"
+    )
     
-    with col1:
-        st.markdown(f"**📊 Archivo de {selected_store}**")
-        store_file = st.file_uploader(
-            f"Excel con publicaciones actuales",
-            type=['xlsx', 'xls', 'csv'],
-            key="store_file",
-            help=f"Archivo en formato {formato_tienda if formato_tienda != 'PorDefinir' else 'estándar'}"
-        )
-        
-        if store_file:
-            try:
-                if store_file.name.endswith('.csv'):
-                    df_preview = pd.read_csv(store_file)
+    if uploaded_file:
+        try:
+            # Cargar el archivo
+            df_maestro = pd.read_excel(uploaded_file)
+            
+            st.success(f"✅ Archivo cargado: {len(df_maestro)} productos totales")
+            
+            # Mostrar columnas disponibles
+            with st.expander("Ver estructura del archivo"):
+                st.write("**Columnas detectadas:**")
+                cols = df_maestro.columns.tolist()
+                col1, col2, col3 = st.columns(3)
+                for i, col in enumerate(cols):
+                    if i % 3 == 0:
+                        col1.write(f"• {col}")
+                    elif i % 3 == 1:
+                        col2.write(f"• {col}")
+                    else:
+                        col3.write(f"• {col}")
+                
+                st.write(f"\n**Total de filas:** {len(df_maestro)}")
+            
+            # Identificar columnas relevantes
+            st.markdown("### 2️⃣ Mapeo de Columnas")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Buscar columna de URL automáticamente
+                url_column = None
+                columna_esperada = TIENDAS_CONFIG[selected_store]['columna_url']
+                
+                if columna_esperada in df_maestro.columns:
+                    url_column = columna_esperada
+                    st.success(f"✅ Columna URL detectada: {url_column}")
                 else:
-                    df_preview = pd.read_excel(store_file)
+                    # Buscar alternativas
+                    posibles = [col for col in df_maestro.columns if 'url' in col.lower() or selected_store.lower() in col.lower()]
+                    if posibles:
+                        url_column = st.selectbox("Seleccionar columna de URLs:", posibles)
+                    else:
+                        url_column = st.selectbox("Seleccionar columna de URLs:", df_maestro.columns)
                 
-                st.success(f"✅ {store_file.name} cargado - {len(df_preview)} filas")
+                # Columna de precio maestro
+                precio_columns = [col for col in df_maestro.columns if 'precio' in col.lower() or 'price' in col.lower()]
+                if precio_columns:
+                    precio_column = st.selectbox("Columna de Precio Correcto:", precio_columns)
+                else:
+                    precio_column = st.selectbox("Columna de Precio Correcto:", df_maestro.columns)
+            
+            with col2:
+                # Columna de SKU
+                sku_columns = [col for col in df_maestro.columns if 'sku' in col.lower() or 'codigo' in col.lower() or 'id' in col.lower()]
+                if sku_columns:
+                    sku_column = st.selectbox("Columna de SKU/ID:", sku_columns)
+                else:
+                    sku_column = st.selectbox("Columna de SKU/ID:", df_maestro.columns)
                 
-                # Vista previa con información de columnas
-                with st.expander("Ver estructura del archivo"):
-                    col_info = pd.DataFrame({
-                        'Columna': df_preview.columns,
-                        'Tipo de dato': df_preview.dtypes.astype(str),
-                        'Valores únicos': [df_preview[col].nunique() for col in df_preview.columns],
-                        'Valores nulos': [df_preview[col].isnull().sum() for col in df_preview.columns]
-                    })
-                    st.dataframe(col_info, use_container_width=True)
+                # Columna de stock
+                stock_columns = [col for col in df_maestro.columns if 'stock' in col.lower() or 'cantidad' in col.lower()]
+                if stock_columns:
+                    stock_column = st.selectbox("Columna de Stock:", stock_columns)
+                else:
+                    stock_column = st.selectbox("Columna de Stock:", df_maestro.columns)
+            
+            # Filtrar solo productos de la tienda seleccionada (que tengan URL)
+            df_tienda = df_maestro[df_maestro[url_column].notna()].copy()
+            df_tienda = df_tienda.rename(columns={
+                url_column: 'url',
+                precio_column: 'precio_maestro',
+                sku_column: 'sku',
+                stock_column: 'stock_maestro'
+            })
+            
+            # Aplicar límite según modo
+            if modo_operacion == "Auditoría Rápida (primeros 10)":
+                df_tienda = df_tienda.head(10)
+            elif modo_operacion == "Auditoría Completa":
+                df_tienda = df_tienda.head(max_productos)
+            
+            st.info(f"📋 Productos de {selected_store} con URL: {len(df_tienda)}")
+            
+            # Vista previa
+            with st.expander("Ver productos a auditar"):
+                st.dataframe(
+                    df_tienda[['sku', 'url', 'precio_maestro', 'stock_maestro']].head(10),
+                    use_container_width=True
+                )
+            
+            # Botón de ejecutar auditoría
+            st.markdown("### 3️⃣ Ejecutar Auditoría")
+            
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                if st.button(f"🚀 Iniciar Auditoría Automática", type="primary", use_container_width=True):
                     
-                    st.write("**Primeras 5 filas:**")
-                    st.dataframe(df_preview.head(), use_container_width=True)
+                    if modo_operacion == "Modo Prueba (simular)":
+                        # Modo simulación para pruebas
+                        st.warning("🧪 Ejecutando en modo prueba (datos simulados)")
+                        
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        # Simular resultados
+                        resultados = []
+                        for idx, row in df_tienda.iterrows():
+                            # Simular variación de precio aleatoria
+                            variacion = np.random.uniform(-10, 10)
+                            precio_web = row['precio_maestro'] * (1 + variacion/100)
+                            
+                            resultados.append({
+                                'idx': idx,
+                                'url': row['url'],
+                                'precio_web': precio_web,
+                                'stock_web': np.random.choice(['Si', 'No', 'Si', 'Si']),  # 75% con stock
+                                'error': None if np.random.random() > 0.1 else "Error simulado",
+                                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            })
+                            
+                            progress_bar.progress((idx + 1) / len(df_tienda))
+                            status_text.text(f"Simulando producto {idx + 1}/{len(df_tienda)}")
+                            time.sleep(0.1)  # Pausa para efecto visual
+                        
+                        progress_bar.empty()
+                        status_text.empty()
+                        
+                    else:
+                        # Modo real con web scraping
+                        st.warning("🌐 Iniciando web scraping real...")
+                        
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        # Realizar scraping
+                        tienda_config = TIENDAS_CONFIG[selected_store]
+                        resultados = realizar_scraping(df_tienda, tienda_config, progress_bar, status_text)
+                        
+                        progress_bar.empty()
+                        status_text.empty()
                     
-            except Exception as e:
-                st.error(f"Error al leer el archivo: {str(e)}")
+                    # Procesar resultados
+                    st.success(f"✅ Auditoría completada: {len(resultados)} productos analizados")
+                    
+                    # Agregar resultados al dataframe
+                    for resultado in resultados:
+                        idx = resultado['idx']
+                        df_tienda.loc[idx, 'precio_web'] = resultado.get('precio_web')
+                        df_tienda.loc[idx, 'stock_web'] = resultado.get('stock_web')
+                        df_tienda.loc[idx, 'error_scraping'] = resultado.get('error')
+                        df_tienda.loc[idx, 'timestamp'] = resultado.get('timestamp')
+                    
+                    # Calcular variaciones
+                    df_tienda['variacion_precio_%'] = ((df_tienda['precio_web'] - df_tienda['precio_maestro']) / df_tienda['precio_maestro'] * 100).round(2)
+                    df_tienda['precio_ok'] = df_tienda['variacion_precio_%'].abs() <= price_threshold
+                    df_tienda['requiere_accion'] = (~df_tienda['precio_ok']) | (df_tienda['stock_web'] == 'No')
+                    
+                    # Guardar en sesión
+                    st.session_state.audit_results = df_tienda
+                    
+                    # Mostrar resumen rápido
+                    st.markdown("### 📊 Resumen de Resultados")
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        total = len(df_tienda)
+                        st.metric("Total Auditados", total)
+                    
+                    with col2:
+                        errores_precio = len(df_tienda[~df_tienda['precio_ok']])
+                        st.metric("Errores de Precio", errores_precio, 
+                                 delta=f"{(errores_precio/total*100):.1f}%" if total > 0 else "0%")
+                    
+                    with col3:
+                        sin_stock = len(df_tienda[df_tienda['stock_web'] == 'No'])
+                        st.metric("Sin Stock", sin_stock,
+                                 delta=f"{(sin_stock/total*100):.1f}%" if total > 0 else "0%")
+                    
+                    with col4:
+                        errores_scraping = len(df_tienda[df_tienda['error_scraping'].notna()])
+                        st.metric("Errores Técnicos", errores_scraping)
+                    
+                    st.info("💡 Ve a la pestaña 'Resultados' para ver el detalle completo")
+            
+        except Exception as e:
+            st.error(f"Error al procesar el archivo: {str(e)}")
+
+with tab2:
+    st.markdown("### 📊 Resultados Detallados de Auditoría")
     
-    with col2:
-        st.markdown("**💾 Base de Datos Maestra (Auditoria General.xlsx)**")
-        database_file = st.file_uploader(
-            "Excel con información maestra",
-            type=['xlsx', 'xls'],
-            key="database_file",
-            help="Archivo 'Auditoria General.xlsx' con todos los productos"
+    if st.session_state.audit_results is not None:
+        df_results = st.session_state.audit_results
+        
+        # Filtros
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            filtro = st.selectbox(
+                "Filtrar por:",
+                ["Todos", "Solo errores de precio", "Solo sin stock", "Requieren acción"]
+            )
+        
+        with col2:
+            orden = st.selectbox(
+                "Ordenar por:",
+                ["Variación de precio", "SKU", "Stock"]
+            )
+        
+        with col3:
+            if st.button("🔄 Refrescar"):
+                st.rerun()
+        
+        # Aplicar filtros
+        df_filtrado = df_results.copy()
+        
+        if filtro == "Solo errores de precio":
+            df_filtrado = df_filtrado[~df_filtrado['precio_ok']]
+        elif filtro == "Solo sin stock":
+            df_filtrado = df_filtrado[df_filtrado['stock_web'] == 'No']
+        elif filtro == "Requieren acción":
+            df_filtrado = df_filtrado[df_filtrado['requiere_accion']]
+        
+        # Ordenar
+        if orden == "Variación de precio":
+            df_filtrado = df_filtrado.sort_values('variacion_precio_%', ascending=False, key=lambda x: x.abs())
+        elif orden == "SKU":
+            df_filtrado = df_filtrado.sort_values('sku')
+        elif orden == "Stock":
+            df_filtrado = df_filtrado.sort_values('stock_web')
+        
+        # Mostrar tabla con formato
+        st.dataframe(
+            df_filtrado[[
+                'sku', 
+                'precio_maestro', 
+                'precio_web', 
+                'variacion_precio_%',
+                'precio_ok',
+                'stock_maestro',
+                'stock_web',
+                'requiere_accion',
+                'url'
+            ]].style.applymap(
+                lambda x: 'background-color: #ffcccc' if x == False else 'background-color: #ccffcc' if x == True else '',
+                subset=['precio_ok']
+            ).applymap(
+                lambda x: 'background-color: #ffcccc' if x == 'No' else '',
+                subset=['stock_web']
+            ).format({
+                'precio_maestro': '${:,.0f}',
+                'precio_web': '${:,.0f}',
+                'variacion_precio_%': '{:.1f}%'
+            }),
+            use_container_width=True,
+            height=500
         )
         
-        if database_file:
-            try:
-                df_bd = pd.read_excel(database_file)
-                st.success(f"✅ {database_file.name} cargado - {len(df_bd)} productos")
-                
-                with st.expander("Ver estructura de BD"):
-                    st.write("**Columnas disponibles:**")
-                    st.write(", ".join(df_bd.columns.tolist()))
-                    st.write(f"\n**Total de productos:** {len(df_bd)}")
-                    
-            except Exception as e:
-                st.error(f"Error al leer la base de datos: {str(e)}")
-
-# Botón de ejecutar auditoría
-with tab1:
-    if store_file and database_file:
-        st.markdown("---")
+        # Exportar resultados
+        st.markdown("### 💾 Exportar Resultados")
         
-        col1, col2, col3 = st.columns([1, 2, 1])
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # Excel completo
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_results.to_excel(writer, sheet_name='Auditoría Completa', index=False)
+                
+                # Hoja de errores
+                df_errores = df_filtrado[df_filtrado['requiere_accion']]
+                if not df_errores.empty:
+                    df_errores.to_excel(writer, sheet_name='Requieren Acción', index=False)
+            
+            output.seek(0)
+            
+            st.download_button(
+                label="📊 Descargar Excel Completo",
+                data=output,
+                file_name=f"Auditoria_{selected_store}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        
         with col2:
-            if st.button(f"🔍 Ejecutar Auditoría de {selected_store}", 
-                        type="primary", 
-                        use_container_width=True):
-                
-                with st.spinner(f"Procesando auditoría de {selected_store}..."):
-                    try:
-                        # Cargar archivos
-                        if store_file.name.endswith('.csv'):
-                            store_df = pd.read_csv(store_file)
-                        else:
-                            store_df = pd.read_excel(store_file)
-                        
-                        db_df = pd.read_excel(database_file)
-                        
-                        # Realizar auditoría
-                        results = perform_audit_bancaria(
-                            store_df, 
-                            db_df, 
-                            selected_store,
-                            formato_tienda,
-                            config_tienda,
-                            price_threshold, 
-                            stock_minimum
-                        )
-                        
-                        st.session_state.results = results
-                        st.session_state.audit_completed = True
-                        st.success(f"✅ Auditoría completada exitosamente")
-                        st.balloons()
-                        
-                    except Exception as e:
-                        st.error(f"❌ Error durante la auditoría: {str(e)}")
-                        st.exception(e)
-
-# Tab de resultados
-with tab2:
-    if st.session_state.audit_completed and st.session_state.results:
-        results = st.session_state.results
+            # CSV de errores
+            csv = df_filtrado[df_filtrado['requiere_accion']].to_csv(index=False)
+            st.download_button(
+                label="📄 Descargar Solo Errores (CSV)",
+                data=csv,
+                file_name=f"Errores_{selected_store}_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
         
-        # Header
-        st.markdown(f"""
-        ### 📊 Resultados de Auditoría
-        **Tienda:** {results['store_name']} | **Formato:** {results['formato']} | **Fecha:** {results['audit_date']}
-        """)
+        with col3:
+            # Reporte resumen
+            resumen = f"""
+REPORTE DE AUDITORÍA - {selected_store}
+Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+=====================================
+
+RESUMEN:
+- Total de productos auditados: {len(df_results)}
+- Errores de precio: {len(df_results[~df_results['precio_ok']])}
+- Productos sin stock: {len(df_results[df_results['stock_web'] == 'No'])}
+- Requieren acción inmediata: {len(df_results[df_results['requiere_accion']])}
+
+PRODUCTOS CON ERRORES DE PRECIO:
+{df_results[~df_results['precio_ok']][['sku', 'precio_maestro', 'precio_web', 'variacion_precio_%']].to_string()}
+
+PRODUCTOS SIN STOCK:
+{df_results[df_results['stock_web'] == 'No'][['sku', 'url']].to_string()}
+            """
+            
+            st.download_button(
+                label="📝 Descargar Reporte TXT",
+                data=resumen,
+                file_name=f"Reporte_{selected_store}_{datetime.now().strftime('%Y%m%d')}.txt",
+                mime="text/plain"
+            )
+    
+    else:
+        st.info("👆 Primero ejecuta una auditoría en la pestaña 'Cargar y Ejecutar'")
+
+with tab3:
+    st.markdown("### 📈 Dashboard de Auditoría")
+    
+    if st.session_state.audit_results is not None:
+        df = st.session_state.audit_results
         
         # Métricas principales
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            health = results['summary'].get('health_score', 0)
-            color = "🟢" if health > 80 else "🟡" if health > 60 else "🔴"
+            accuracy = (len(df[df['precio_ok']]) / len(df) * 100) if len(df) > 0 else 0
             st.metric(
-                label=f"{color} Salud del Catálogo",
-                value=f"{health}%",
-                delta="Excelente" if health > 80 else "Regular" if health > 60 else "Crítico"
+                "Precisión de Precios",
+                f"{accuracy:.1f}%",
+                delta="Bueno" if accuracy > 90 else "Regular" if accuracy > 80 else "Malo"
             )
         
         with col2:
-            total = results['summary'].get('total_productos_tienda', 0)
-            st.metric(
-                label="📦 Total Productos",
-                value=f"{total:,}",
-                delta=f"{results['summary'].get('total_productos_bd', 0):,} en BD"
-            )
-        
-        with col3:
-            errores_formato = len(results['validacion_formato'].get('errores', []))
-            color = "🔴" if errores_formato > 0 else "🟢"
-            st.metric(
-                label=f"{color} Errores de Formato",
-                value=errores_formato,
-                delta="Crítico" if errores_formato > 0 else "OK"
-            )
-        
-        with col4:
-            sin_stock = results['summary'].get('productos_sin_stock', 0)
-            color = "🔴" if sin_stock > 0 else "🟢"
-            st.metric(
-                label=f"{color} Sin Stock",
-                value=sin_stock,
-                delta="Reponer" if sin_stock > 0 else "OK"
-            )
-        
-        # Mostrar errores y advertencias de formato
-        if results['validacion_formato']['errores'] or results['validacion_formato']['advertencias']:
-            st.markdown("---")
-            st.subheader("⚠️ Validación de Formato")
-            
-            if results['validacion_formato']['errores']:
-                st.error("**Errores Críticos (corregir antes de publicar):**")
-                for error in results['validacion_formato']['errores']:
-                    st.write(f"• {error}")
-            
-            if results['validacion_formato']['advertencias']:
-                st.warning("**Advertencias (revisar):**")
-                for advertencia in results['validacion_formato']['advertencias']:
-                    st.write(f"• {advertencia}")
-        
-        # Recomendaciones
-        if results.get('recommendations'):
-            st.markdown("---")
-            st.subheader("💡 Recomendaciones de Acción")
-            
-            for rec in sorted(results['recommendations'], 
-                           key=lambda x: {'CRITICA': 0, 'ALTA': 1, 'MEDIA': 2, 'BAJA': 3}.get(x['prioridad'], 4)):
-                if rec['prioridad'] == 'CRITICA':
-                    st.error(f"🔴 **{rec['prioridad']}** - {rec['tipo']}: {rec['accion']}")
-                elif rec['prioridad'] == 'ALTA':
-                    st.error(f"🔴 **{rec['prioridad']}** - {rec['tipo']}: {rec['accion']}")
-                elif rec['prioridad'] == 'MEDIA':
-                    st.warning(f"🟡 **{rec['prioridad']}** - {rec['tipo']}: {rec['accion']}")
-                else:
-                    st.info(f"🔵 **{rec['prioridad']}** - {rec['tipo']}: {rec['accion']}")
-        
-        # Detalles de problemas
-        st.markdown("---")
-        
-        # Tabs para diferentes análisis
-        analysis_tabs = st.tabs(["💰 Precios", "📦 Stock", "📋 Productos Faltantes"])
-        
-        with analysis_tabs[0]:
-            st.subheader("Análisis de Precios")
-            if results.get('price_issues'):
-                st.warning(f"⚠️ {len(results['price_issues'])} productos con variación superior al {price_threshold}%")
-                
-                price_df = pd.DataFrame(results['price_issues'])
-                st.dataframe(price_df, use_container_width=True, hide_index=True)
-            else:
-                st.success("✅ Todos los precios están dentro del rango aceptable")
-        
-        with analysis_tabs[1]:
-            st.subheader("Análisis de Stock")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Sin Stock", results['summary'].get('productos_sin_stock', 0))
-            with col2:
-                st.metric("Stock Bajo", results['summary'].get('productos_stock_bajo', 0))
-            
-            if results.get('stock_issues'):
-                st.error(f"Productos sin stock (primeros 50):")
-                st.write(results['stock_issues'][:50])
-        
-        with analysis_tabs[2]:
-            st.subheader("Productos No Encontrados")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("No están en BD", results['summary'].get('productos_no_en_bd', 0))
-            with col2:
-                st.metric("No publicados", results['summary'].get('productos_no_publicados', 0))
-            
-            if results.get('missing_products'):
-                st.info(f"Productos en {selected_store} que no están en la BD (primeros 20):")
-                st.write(results['missing_products'][:20])
-        
-        # Exportación
-        st.markdown("---")
-        st.subheader("📥 Exportar Resultados")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            # Generar Excel completo
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                # Resumen
-                summary_df = pd.DataFrame([results['summary']])
-                summary_df.to_excel(writer, sheet_name='Resumen', index=False)
-                
-                # Errores de formato
-                if results['validacion_formato']['errores'] or results['validacion_formato']['advertencias']:
-                    formato_df = pd.DataFrame({
-                        'Tipo': ['Error'] * len(results['validacion_formato']['errores']) + 
-                                ['Advertencia'] * len(results['validacion_formato']['advertencias']),
-                        'Descripción': results['validacion_formato']['errores'] + 
-                                      results['validacion_formato']['advertencias']
-                    })
-                    formato_df.to_excel(writer, sheet_name='Validación_Formato', index=False)
-                
-                # Problemas de precio
-                if results.get('price_issues'):
-                    price_df = pd.DataFrame(results['price_issues'])
-                    price_df.to_excel(writer, sheet_name='Problemas_Precio', index=False)
-                
-                # Recomendaciones
-                if results.get('recommendations'):
-                    rec_df = pd.DataFrame(results['recommendations'])
-                    rec_df.to_excel(writer, sheet_name='Recomendaciones', index=False)
-            
-            output.seek(0)
-            
-            st.download_button(
-                label=f"📊 Descargar Reporte Excel",
-                data=output,
-                file_name=f"Auditoria_{selected_store.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        
-        with col2:
-            if st.button("🔄 Nueva Auditoría", use_container_width=True):
-                st.session_state.audit_completed = False
-                st.session_state.results = None
-                st.rerun()
-
-# Tab de validación de formato
-with tab3:
-    st.subheader("📋 Validación de Formato")
-    
-    if formato_tienda == "APER":
-        st.info("📐 Formato APER - Usado por ICBC, Supervielle y Galicia")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**✅ Formato Correcto:**")
-            st.code("""
-SKU padre | SKU    | Titulo de publicacion | Precio | Stock | Pausar
-1001      | 1001-A | Producto ejemplo      | 15000  | 10    | NO
-1001      | 1001-B | Producto ejemplo XL   | 18000  | 5     | NO
-            """)
-        
-        with col2:
-            st.markdown("**❌ Errores Comunes:**")
-            st.write("""
-            • Precio con decimales (15000.00)
-            • Pausar con valores incorrectos (si/no en minúsculas)
-            • Títulos > 60 caracteres
-            • SKU no numérico
-            """)
-    
-    elif formato_tienda == "Ciudad":
-        st.info("📐 Formato Ciudad - Tienda Ciudad")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**✅ Formato Correcto:**")
-            st.code("""
-Identificador de URL | Nombre        | Precio   | Disponibilidad
-producto-ejemplo     | Producto Test | 15000.00 | in stock
-producto-ejemplo-xl  | Producto XL   | 18000.00 | out of stock
-            """)
-        
-        with col2:
-            st.markdown("**❌ Errores Comunes:**")
-            st.write("""
-            • URL con espacios o caracteres especiales
-            • Disponibilidad != "in stock" / "out of stock"
-            • Precio sin decimales
-            • Falta columna Marca
-            """)
-    
-    else:
-        st.warning("⚠️ Esta tienda aún no tiene un formato definido")
-        st.info("""
-        **Para configurar el formato de esta tienda necesitamos:**
-        1. Un archivo Excel de ejemplo de la tienda
-        2. Identificar las columnas requeridas
-        3. Definir las validaciones necesarias
-        """)
-
-# Tab de documentación
-with tab4:
-    st.subheader("📚 Documentación del Sistema")
-    
-    # Estado de cada tienda
-    st.markdown("### 🏦 Estado de Configuración por Tienda")
-    
-    status_data = []
-    for formato, config in TIENDAS_CONFIG.items():
-        for tienda in config["tiendas"]:
-            status_data.append({
-                "Tienda": tienda,
-                "Formato": config["formato"],
-                "Estado": "✅ Configurado" if config["formato"] != "PorDefinir" else "⏳ Pendiente",
-                "Validaciones": len(config.get("validaciones", {}))
-            })
-    
-    status_df = pd.DataFrame(status_data)
-    st.dataframe(status_df, use_container_width=True, hide_index=True)
-    
-    # Información detallada
-    with st.expander("🔍 Ver detalles de formatos configurados"):
-        st.markdown("""
-        ### Formato APER (ICBC, Supervielle, Galicia)
-        
-        **Columnas requeridas:**
-        - `SKU padre`: Agrupa variantes del mismo producto
-        - `SKU`: Identificador único
-        - `Titulo de publicacion`: Máximo 60 caracteres
-        - `Precio`: Sin decimales (15000 en lugar de 15000.00)
-        - `Stock`: Cantidad disponible
-        - `Pausar`: SI/NO en mayúsculas
-        - `Cuotas`: Número de cuotas disponibles
-        - `Cuotas sin interes`: Número de cuotas sin interés
-        
-        **Validaciones aplicadas:**
-        - Precio debe ser entero
-        - Pausar solo acepta SI/NO
-        - Título máximo 60 caracteres
-        - SKU debe ser numérico
-        
-        ---
-        
-        ### Formato Ciudad
-        
-        **Columnas requeridas:**
-        - `Identificador de URL`: Slug del producto (solo letras, números y guiones)
-        - `Nombre`: Nombre del producto
-        - `Identificador de producto de item`: ID único
-        - `Precio`: Con decimales (15000.00)
-        - `Precio de lista`: Precio sin descuento
-        - `Disponibilidad`: "in stock" o "out of stock"
-        - `Marca`: Marca del producto
-        
-        **Validaciones aplicadas:**
-        - URL sin caracteres especiales
-        - Disponibilidad valores específicos
-        - Precios con formato decimal
-        """)
-    
-    # Guía de uso
-    with st.expander("📖 Guía de Uso"):
-        st.markdown("""
-        ### Cómo realizar una auditoría:
-        
-        1. **Seleccionar la tienda** en el sidebar
-        2. **Cargar el archivo de la tienda** (formato específico según tienda)
-        3. **Cargar Auditoria General.xlsx** (base de datos maestra)
-        4. **Ejecutar la auditoría**
-        5. **Revisar resultados** y validaciones de formato
-        6. **Exportar el reporte** en Excel
-        
-        ### Interpretación de resultados:
-        
-        - 🟢 **Health Score > 80%**: Catálogo en buen estado
-        - 🟡 **Health Score 60-80%**: Requiere atención
-        - 🔴 **Health Score < 60%**: Crítico, acción inmediata
-        
-        ### Prioridad de acciones:
-        
-        1. **CRÍTICA**: Errores de formato (impiden publicación)
-        2. **ALTA**: Productos sin stock, precios incorrectos
-        3. **MEDIA**: Productos pausados, faltantes en BD
-        4. **BAJA**: Advertencias, optimizaciones
-        """)
-    
-    # Roadmap
-    with st.expander("🚀 Roadmap - Próximas Funcionalidades"):
-        st.markdown("""
-        ### En desarrollo:
-        
-        - [ ] Configuración formato **Tienda BNA**
-        - [ ] Configuración formato **Fravega**
-        - [ ] Configuración formato **Megatone**
-        - [ ] Configuración formato **Banco Provincia (Bapro)**
-        - [ ] Configuración formato **OnCity** (cuando esté activa)
-        
-        ### Funcionalidades futuras:
-        
-        - [ ] Generación automática de archivos para carga
-        - [ ] Histórico de auditorías
-        - [ ] Comparación entre períodos
-        - [ ] Dashboard con métricas en tiempo real
-        - [ ] Alertas automáticas por email
-        - [ ] API para integración con sistemas
-        """)
-
-# Footer
-st.markdown("---")
-st.markdown(
-    f"""
-    <div style='text-align: center; color: gray; padding: 20px;'>
-        <p>🏦 Sistema de Auditoría Bancaria v2.0 | 
-        Formatos configurados: APER (ICBC, Supervielle, Galicia) y Ciudad |
-        {datetime.now().strftime("%d/%m/%Y %H:%M")}</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+            disponibilidad = (len(df[df['stock_web'] == 'Si']) / len(df) * 100
