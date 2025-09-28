@@ -836,15 +836,31 @@ with tab2:
         columnas_mostrar = ['sku', 'precio_maestro', 'precio_web', 'variacion_precio_%', 
                            'precio_ok', 'stock_web', 'requiere_accion']
         
-        st.dataframe(
-            df_mostrar[columnas_mostrar].style.format({
-                'precio_maestro': '${:,.0f}',
-                'precio_web': '${:,.0f}',
-                'variacion_precio_%': '{:.1f}%'
-            }),
-            use_container_width=True,
-            height=400
-        )
+        # Asegurar que las columnas existan
+        columnas_existentes = [col for col in columnas_mostrar if col in df_mostrar.columns]
+        
+        # Crear una copia para mostrar con formato seguro
+        df_display = df_mostrar[columnas_existentes].copy()
+        
+        # Reemplazar NaN con valores por defecto antes de formatear
+        df_display['precio_maestro'] = df_display.get('precio_maestro', pd.Series()).fillna(0)
+        df_display['precio_web'] = df_display.get('precio_web', pd.Series()).fillna(0)
+        df_display['variacion_precio_%'] = df_display.get('variacion_precio_%', pd.Series()).fillna(0)
+        
+        # Mostrar sin formato si hay problemas
+        try:
+            st.dataframe(
+                df_display.style.format({
+                    'precio_maestro': lambda x: f'${x:,.0f}' if pd.notna(x) and x != 0 else '-',
+                    'precio_web': lambda x: f'${x:,.0f}' if pd.notna(x) and x != 0 else '-',
+                    'variacion_precio_%': lambda x: f'{x:.1f}%' if pd.notna(x) else '-'
+                }, na_rep='-'),
+                use_container_width=True,
+                height=400
+            )
+        except:
+            # Si falla el formato, mostrar sin formato
+            st.dataframe(df_display, use_container_width=True, height=400)
         
         # Exportar
         st.markdown("### 💾 Exportar")
