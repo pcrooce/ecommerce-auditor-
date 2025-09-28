@@ -6,4 +6,3 @@ openpyxl
 requests
 beautifulsoup4
 lxml
-matplotlib
