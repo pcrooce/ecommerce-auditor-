@@ -129,35 +129,60 @@ if 'audit_results' not in st.session_state:
 TIENDAS_CONFIG = {
     "ICBC": {
         "base_url": "https://mall.icbc.com.ar",
-        "columnas_busqueda": ["ICBC", "icbc", "Icbc"],  # Qué buscar en las columnas del Excel
-        "formato_precio_web": "15000",  # Ejemplo de cómo viene el precio en la web
+        "columnas_busqueda": ["ICBC", "icbc", "Icbc"],
+        "formato_precio_web": "496.569",  # Sin símbolo $, con punto como separador de miles
         "columna_url": "URL ICBC",
-        "selector_precio": ["span.price-now", "div.precio-final", "span.price"],
-        "selector_stock": ["span.stock-qty", "div.stock-disponible"]
+        "selector_precio": [
+            "p.monto",  # Selector correcto para ICBC
+            "span.price",
+            "div.precio-final"
+        ],
+        "selector_stock": [
+            "button.add-to-cart",
+            "button[data-button-action='add-to-cart']",
+            "div.product-availability"
+        ]
+    },
+    "Supervielle": {
+        "base_url": "https://www.clubsupervielle.com.ar",
+        "columnas_busqueda": ["Supervielle", "supervielle", "SUPERVIELLE", "Sup"],
+        "formato_precio_web": "505.009,00",  # Con punto para miles y coma para decimales
+        "columna_url": "URL Supervielle",
+        "selector_precio": [
+            "span#our_price_display",  # Selector correcto para Supervielle
+            "span.price[itemprop='price']",
+            "span.price"
+        ],
+        "selector_stock": [
+            "span.product-availability",
+            "div#product-availability",
+            "button.add-to-cart"
+        ]
+    },
+    "Galicia": {
+        "base_url": "https://tienda.galicia.ar",
+        "columnas_busqueda": ["Galicia", "galicia", "GALICIA", "Gal"],
+        "formato_precio_web": "570.659,00",  # Con punto para miles y coma para decimales
+        "columna_url": "URL Galicia",
+        "selector_precio": [
+            "div.productPrice span",  # Selector para el span dentro del precio
+            "span.productPrice",
+            "div.price-wrapper span",
+            ".productPrice span"
+        ],
+        "selector_stock": [
+            "button.add-to-cart",
+            "div.stock-availability",
+            "span.availability"
+        ]
     },
     "Tienda Ciudad": {
         "base_url": "https://tiendaciudad.com.ar",
         "columnas_busqueda": ["Ciudad", "ciudad", "CIUDAD", "Cdad"],
-        "formato_precio_web": "15.000,00",  # Ejemplo de formato
+        "formato_precio_web": "15.000,00",
         "columna_url": "URL Ciudad",
         "selector_precio": ["span.price", "span.precio-actual", "div.price-now"],
         "selector_stock": ["span.stock-disponible", "div.availability"]
-    },
-    "Supervielle": {
-        "base_url": "https://tienda.supervielle.com.ar",
-        "columnas_busqueda": ["Supervielle", "supervielle", "SUPERVIELLE", "Sup"],
-        "formato_precio_web": "15000",
-        "columna_url": "URL Supervielle",
-        "selector_precio": ["span.price", "div.precio"],
-        "selector_stock": ["div.stock", "span.disponibilidad"]
-    },
-    "Galicia": {
-        "base_url": "https://tienda.galicia.com.ar",
-        "columnas_busqueda": ["Galicia", "galicia", "GALICIA", "Gal"],
-        "formato_precio_web": "15000",
-        "columna_url": "URL Galicia",
-        "selector_precio": ["span.precio", "div.price-box"],
-        "selector_stock": ["span.stock", "div.availability"]
     },
     "Tienda BNA": {
         "base_url": "https://tiendabna.com.ar",
@@ -915,29 +940,100 @@ with tab4:
     st.markdown("""
     ### ❓ Preguntas Frecuentes
     
+    **¿Por qué aparece "-" en el precio web?**
+    - La URL puede no ser accesible
+    - La página cambió su estructura HTML
+    - Puede requerir login o tener protección anti-bots
+    - Error de conexión o timeout
+    
     **¿Qué archivo debo cargar?**
-    - Cualquier Excel que contenga las columnas con URLs, precios y SKUs
-    - Puede llamarse "Auditoria General.xlsx" o cualquier otro nombre
+    - Cualquier Excel con las columnas de URLs y precios
+    - Puede tener cualquier nombre
     
     **¿Cómo detecta las columnas?**
-    - El sistema busca automáticamente columnas que contengan el nombre de la tienda
-    - Por ejemplo, para ICBC busca columnas con "ICBC", "icbc", etc.
+    - Busca automáticamente el nombre de la tienda en las columnas
+    - Por ejemplo: "ICBC", "Precio ICBC", etc.
     
-    **¿Qué significa el formato de precio?**
-    - Se refiere a cómo viene el precio en la web (15.000 vs 15000)
-    - NO se refiere a puntos de fidelidad o beneficios
+    ### 🔧 Diagnóstico de Problemas
+    """)
     
-    **¿Por qué algunos productos dan error?**
-    - Puede ser que la URL no exista
-    - La página cambió su estructura
-    - Problemas de conexión
+    # Test individual de URL
+    st.subheader("🧪 Probar URL Individual")
     
-    ### 🔧 Solución de Problemas
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        test_url = st.text_input("URL a probar:", placeholder="https://mall.icbc.com.ar/producto/...")
+    with col2:
+        test_button = st.button("🔍 Probar", use_container_width=True)
     
-    Si encuentras el error "Expected numeric dtype":
-    1. Verifica que la columna de precios tenga números
-    2. Revisa que no haya textos como "N/A" en precios
-    3. El sistema limpia automáticamente símbolos $ y puntos
+    if test_button and test_url:
+        with st.spinner("Probando URL..."):
+            config = TIENDAS_CONFIG.get(selected_store, TIENDAS_CONFIG['ICBC'])
+            scraper = WebScraper(config)
+            resultado = scraper.scrape_url(test_url)
+            
+            # Mostrar resultado completo
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if resultado['precio_web']:
+                    st.success(f"💰 Precio: ${resultado['precio_web']:,.0f}")
+                else:
+                    st.error("❌ No se pudo obtener precio")
+            
+            with col2:
+                if resultado['stock_web']:
+                    st.info(f"📦 Stock: {resultado['stock_web']}")
+                else:
+                    st.warning("❓ Stock desconocido")
+            
+            with col3:
+                if resultado['error']:
+                    st.error("🚫 Error detectado")
+            
+            # Detalles del error si existe
+            if resultado['error']:
+                st.error(f"**Error:** {resultado['error']}")
+                st.info("""
+                **Posibles soluciones:**
+                1. Verifica que la URL sea correcta y accesible
+                2. La página puede requerir login
+                3. Intenta en modo simulación para verificar el proceso
+                """)
+            
+            # Mostrar JSON completo para debug
+            with st.expander("🔧 Ver respuesta completa (debug)"):
+                st.json(resultado)
+    
+    # Información sobre tiendas
+    st.markdown("---")
+    st.subheader("🏪 Estado de Configuración por Tienda")
+    
+    tienda_info = []
+    for tienda, config in TIENDAS_CONFIG.items():
+        tienda_info.append({
+            "Tienda": tienda,
+            "URL Base": config['base_url'],
+            "Columnas": ', '.join(config['columnas_busqueda'][:3]) + '...',
+            "Estado": "✅ Configurado" if config.get('selector_precio') else "⚠️ Básico"
+        })
+    
+    df_tiendas = pd.DataFrame(tienda_info)
+    st.dataframe(df_tiendas, use_container_width=True, hide_index=True)
+    
+    st.markdown("""
+    ---
+    ### 💡 Soluciones Comunes
+    
+    **Si el scraping no funciona:**
+    1. **Usa el modo Prueba (simulado)** para verificar que todo lo demás funcione
+    2. **Verifica las URLs** - deben ser públicas y accesibles
+    3. **Contacta soporte** si una tienda específica no funciona
+    
+    **Para mejorar resultados:**
+    - Mantén las URLs actualizadas en tu Excel
+    - Ejecuta auditorías en horarios de menor tráfico
+    - Usa modo rápido primero para verificar
     """)
 
 # Footer
