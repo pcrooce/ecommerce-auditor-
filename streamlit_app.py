@@ -321,40 +321,54 @@ class WebScraper:
                 # Cuotas con Visa/Mastercard
                 cuotas_encontradas = False
                 try:
-                    cuotas_containers = page.locator("span.sc-3cba7521-10").all()
+                    page_content = page.content()
+                    soup = BeautifulSoup(page_content, 'html.parser')
                     
-                    # DEBUG: Ver cuántos contenedores encontró
-                    num_containers = len(cuotas_containers)
+                    # Buscar todos los divs con clase sc-3cba7521-0 que contienen info de cuotas
+                    cuotas_divs = soup.find_all('div', class_=lambda x: x and 'sc-3cba7521-0' in x)
                     
-                    for idx, container in enumerate(cuotas_containers):
-                        # Buscar el contenedor padre que tiene las imágenes
-                        parent = container.locator("xpath=../..")
-                        imagenes = parent.locator("img").all()
+                    for div in cuotas_divs:
+                        # Buscar el span con el texto de cuotas dentro
+                        cuotas_span = div.find('span', class_=lambda x: x and 'sc-3cba7521-10' in x)
                         
-                        # Contar imágenes de Visa y Mastercard
-                        visa_count = 0
-                        master_count = 0
+                        if not cuotas_span:
+                            continue
                         
-                        for img in imagenes:
-                            src = img.get_attribute('src')
-                            if src:
-                                src_lower = src.lower()
-                                if 'd91d7904a8578' in src_lower:
-                                    visa_count += 1
-                                if '54c0d769ece1b' in src_lower:
-                                    master_count += 1
+                        texto = cuotas_span.get_text()
+                        match = re.search(r'(\d+)\s*cuotas?', texto, re.IGNORECASE)
                         
-                        # Solo si tiene AMBAS tarjetas
-                        if visa_count >= 1 and master_count >= 1:
-                            texto = container.text_content()
-                            match = re.search(r'(\d+)\s*cuotas?', texto, re.IGNORECASE)
-                            if match:
-                                resultado['cuotas'] = int(match.group(1))
+                        if not match:
+                            continue
+                        
+                        num_cuotas = int(match.group(1))
+                        
+                        # Buscar el div con las imágenes (sc-3cba7521-3)
+                        img_container = div.find('div', class_=lambda x: x and 'sc-3cba7521-3' in x)
+                        
+                        if img_container:
+                            imagenes = img_container.find_all('img', src=True)
+                            
+                            visa_found = False
+                            master_found = False
+                            
+                            for img in imagenes:
+                                src = img.get('src', '')
+                                # Visa: d91d7904a8578
+                                if 'd91d7904a8578' in src:
+                                    visa_found = True
+                                # Mastercard: 54c0d769ece1b
+                                if '54c0d769ece1b' in src:
+                                    master_found = True
+                            
+                            # Si tiene AMBAS tarjetas (Visa Y Mastercard)
+                            if visa_found and master_found:
+                                resultado['cuotas'] = num_cuotas
                                 cuotas_encontradas = True
                                 break
                     
                     if not cuotas_encontradas:
                         resultado['cuotas'] = 1
+                        
                 except Exception as e:
                     resultado['cuotas'] = 1
                     resultado['error'] = f"Error cuotas: {str(e)}"
