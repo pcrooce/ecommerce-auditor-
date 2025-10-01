@@ -16,7 +16,7 @@ try:
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
-    st.warning("Playwright no instalado. Frávega tendrá funcionalidad limitada.")
+    st.warning("⚠️ Playwright no instalado. Todas las tiendas tendrán funcionalidad limitada (solo precios básicos).")
 
 try:
     from openpyxl import Workbook
@@ -54,8 +54,8 @@ div[data-testid="metric-container"] {
 
 st.markdown("""
 <div class="audit-header">
-    <h1>🤖 Sistema de Auditoría Automática v6.0</h1>
-    <p>Con soporte completo para Frávega</p>
+    <h1>🤖 Sistema de Auditoría Automática v6.1</h1>
+    <p>Con soporte Playwright para todas las tiendas</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -185,7 +185,6 @@ class WebScraper:
     def scrape_fravega_con_playwright(self, url):
         """Scrapea Frávega usando Playwright para contenido dinámico"""
         
-        # VALIDACIÓN: URL debe ser válida
         if not url or not isinstance(url, str):
             return {
                 'url': url,
@@ -200,7 +199,6 @@ class WebScraper:
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
         
-        # VALIDACIÓN: URL debe comenzar con http:// o https://
         if not url.startswith('http://') and not url.startswith('https://'):
             return {
                 'url': url,
@@ -238,18 +236,13 @@ class WebScraper:
                 page = context.new_page()
                 
                 page.goto(url, wait_until='networkidle', timeout=30000)
-                page.wait_for_timeout(3000)  # Aumentado a 3 segundos
+                page.wait_for_timeout(3000)
                 
-                # PRIMERO: Verificar si está inhabilitado (múltiples métodos)
                 producto_inhabilitado = False
                 try:
-                    # Método 1: Verificar atributo disabled del botón
                     boton = page.locator("button[data-test-id='product-buy-button']").first
-                    
-                    # Esperar a que el botón aparezca
                     boton.wait_for(timeout=5000)
                     
-                    # Verificar si está deshabilitado
                     is_disabled = boton.is_disabled()
                     has_disabled_attr = boton.get_attribute('disabled') is not None
                     
@@ -257,17 +250,14 @@ class WebScraper:
                         producto_inhabilitado = True
                         resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
                     
-                    # Método 2: Verificar el texto del botón (a veces dice "No disponible")
                     texto_boton = boton.text_content()
                     if texto_boton and 'no disponible' in texto_boton.lower():
                         producto_inhabilitado = True
                         resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
                         
-                except Exception as e:
-                    # Si no encontramos el botón, el producto podría no existir
+                except:
                     pass
                 
-                # Título (siempre intentar obtener)
                 try:
                     titulo = page.locator("h1[data-test-id='product-title']").text_content(timeout=5000)
                     if titulo:
@@ -275,7 +265,6 @@ class WebScraper:
                 except:
                     pass
                 
-                # Categorías (siempre intentar obtener)
                 try:
                     categorias_elems = page.locator("span[itemprop='name']").all()
                     categorias_validas = []
@@ -289,27 +278,23 @@ class WebScraper:
                 except:
                     pass
                 
-                # Si está inhabilitado, NO intentar scrapear precios/cuotas
                 if producto_inhabilitado:
-                    resultado['cuotas'] = None  # No hay cuotas disponibles
+                    resultado['cuotas'] = None
                     browser.close()
                     return resultado
                 
-                # Precio (solo si está habilitado)
                 try:
                     precio = page.locator("span.sc-1d9b1d9e-0.sc-faa1a185-3").first.text_content(timeout=5000)
                     resultado['precio_web'] = limpiar_precio(precio)
                 except:
                     pass
                 
-                # Precio tachado
                 try:
                     tachado = page.locator("span.sc-e081bce1-0.sc-faa1a185-4").first.text_content(timeout=5000)
                     resultado['precio_tachado'] = limpiar_precio(tachado)
                 except:
                     pass
                 
-                # Descuento
                 try:
                     descuento = page.locator("span.sc-e2aca368-0").first.text_content(timeout=5000)
                     match = re.search(r'(\d+)', descuento)
@@ -318,17 +303,14 @@ class WebScraper:
                 except:
                     pass
                 
-                # Cuotas con Visa/Mastercard
                 cuotas_encontradas = False
                 try:
                     page_content = page.content()
                     soup = BeautifulSoup(page_content, 'html.parser')
                     
-                    # Buscar todos los divs con clase sc-3cba7521-0 que contienen info de cuotas
                     cuotas_divs = soup.find_all('div', class_=lambda x: x and 'sc-3cba7521-0' in x)
                     
                     for div in cuotas_divs:
-                        # Buscar el span con el texto de cuotas dentro
                         cuotas_span = div.find('span', class_=lambda x: x and 'sc-3cba7521-10' in x)
                         
                         if not cuotas_span:
@@ -342,29 +324,24 @@ class WebScraper:
                         
                         num_cuotas = int(match.group(1))
                         
-                        # Buscar el div con las imágenes (sc-3cba7521-3)
                         img_container = div.find('div', class_=lambda x: x and 'sc-3cba7521-3' in x)
                         
                         if img_container:
                             imagenes = img_container.find_all('img', src=True)
                             
-                            visa_found = False
-                            master_found = False
-                            
-                            for img in imagenes:
-                                src = img.get('src', '')
-                                # Visa: d91d7904a8578
-                                if 'd91d7904a8578' in src:
-                                    visa_found = True
-                                # Mastercard: 54c0d769ece1b
-                                if '54c0d769ece1b' in src:
-                                    master_found = True
-                            
-                            # Si tiene AMBAS tarjetas (Visa Y Mastercard)
-                            if visa_found and master_found:
-                                resultado['cuotas'] = num_cuotas
-                                cuotas_encontradas = True
-                                break
+                            if len(imagenes) >= 2:
+                                es_visa_master = False
+                                for img in imagenes[:2]:
+                                    src = img.get('src', '').lower()
+                                    if 'd91d7904a8578' in src or '54c0d769ece1b' in src or \
+                                       'visa' in src or 'mastercard' in src:
+                                        es_visa_master = True
+                                        break
+                                
+                                if es_visa_master:
+                                    resultado['cuotas'] = num_cuotas
+                                    cuotas_encontradas = True
+                                    break
                     
                     if not cuotas_encontradas:
                         resultado['cuotas'] = 1
@@ -381,43 +358,193 @@ class WebScraper:
         
         return resultado
     
-    def extraer_cuotas_fravega(self, soup):
-        if 'selector_cuotas_container' not in self.config:
-            return None
+    def scrape_con_playwright(self, url):
+        """Scrapea usando Playwright para todas las tiendas (contenido dinámico)"""
         
-        cuotas_containers = soup.select(self.config['selector_cuotas_container'])
+        if not url or not isinstance(url, str) or not url.startswith('http'):
+            return {
+                'url': url,
+                'titulo': None,
+                'precio_web': None,
+                'precio_tachado': None,
+                'descuento_%': None,
+                'categoria': None,
+                'cuotas': None,
+                'estado_producto': 'Error - URL inválida',
+                'error': 'URL inválida',
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
         
-        for container in cuotas_containers:
-            # Buscar el div padre que contiene las imágenes
-            parent = container.find_parent()
-            if not parent:
-                parent = container
-            
-            # Buscar específicamente el div hermano con las imágenes
-            parent_wrapper = parent.find_parent()
-            if parent_wrapper:
-                imagenes = parent_wrapper.find_all('img', src=True)
-            else:
-                imagenes = parent.find_all('img', src=True)
-            
-            # Contar cuántas imágenes de Visa/Mastercard hay
-            visa_master_count = 0
-            for img in imagenes:
-                src = img.get('src', '').lower()
-                # Buscar las URLs exactas de Visa y Mastercard de Frávega
-                if 'd91d7904a8578' in src or '54c0d769ece1b' in src:
-                    visa_master_count += 1
-            
-            # Solo considerar si tiene AMBAS (Visa Y Mastercard)
-            if visa_master_count >= 2:
-                texto = container.get_text()
-                match = re.search(r'(\d+)\s*cuotas?', texto, re.IGNORECASE)
-                if match:
-                    return int(match.group(1))
+        resultado = {
+            'url': url,
+            'titulo': None,
+            'precio_web': None,
+            'precio_tachado': None,
+            'descuento_%': None,
+            'categoria': None,
+            'cuotas': None,
+            'estado_producto': 'Activo',
+            'error': None,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
         
-        return 1
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    viewport={'width': 1920, 'height': 1080},
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                )
+                page = context.new_page()
+                
+                page.goto(url, wait_until='networkidle', timeout=30000)
+                page.wait_for_timeout(3000)
+                
+                page_content = page.content()
+                soup = BeautifulSoup(page_content, 'html.parser')
+                
+                if self.tienda == "Fravega":
+                    try:
+                        boton = page.locator("button[data-test-id='product-buy-button']").first
+                        boton.wait_for(timeout=5000)
+                        
+                        if boton.is_disabled() or boton.get_attribute('disabled') is not None:
+                            resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
+                            browser.close()
+                            return resultado
+                    except:
+                        pass
+                
+                if 'selector_titulo' in self.config:
+                    try:
+                        if self.tienda == "Fravega":
+                            titulo = page.locator(self.config['selector_titulo']).text_content(timeout=5000)
+                        else:
+                            titulo_elem = soup.select_one(self.config['selector_titulo'])
+                            titulo = titulo_elem.get_text(strip=True) if titulo_elem else None
+                        
+                        if titulo:
+                            resultado['titulo'] = titulo.strip()
+                    except:
+                        pass
+                
+                if 'selector_precio' in self.config:
+                    try:
+                        precio_elem = soup.select_one(self.config['selector_precio'])
+                        if precio_elem:
+                            resultado['precio_web'] = limpiar_precio(precio_elem.get_text(strip=True))
+                    except:
+                        pass
+                
+                if 'selector_precio_tachado' in self.config:
+                    try:
+                        if self.tienda == "Supervielle":
+                            precio_spans = soup.select('span.price')
+                            if len(precio_spans) >= 2:
+                                resultado['precio_tachado'] = limpiar_precio(precio_spans[1].get_text(strip=True))
+                        else:
+                            tachado_elem = soup.select_one(self.config['selector_precio_tachado'])
+                            if tachado_elem:
+                                resultado['precio_tachado'] = limpiar_precio(tachado_elem.get_text(strip=True))
+                    except:
+                        pass
+                
+                if 'selector_descuento' in self.config:
+                    try:
+                        desc_elem = soup.select_one(self.config['selector_descuento'])
+                        if desc_elem:
+                            desc_text = desc_elem.get_text(strip=True)
+                            match = re.search(r'(\d+)', desc_text)
+                            if match:
+                                resultado['descuento_%'] = float(match.group(1))
+                    except:
+                        pass
+                
+                if 'selector_categoria' in self.config:
+                    try:
+                        cat_elems = soup.select(self.config['selector_categoria'])
+                        categorias_validas = []
+                        
+                        exclusiones = ['icbc', 'fravega', 'frávega', 'supervielle', 
+                                      'galicia', 'ciudad', 'home', 'inicio', 'mall']
+                        
+                        for elem in cat_elems:
+                            texto = elem.get_text(strip=True)
+                            if texto and texto.lower() not in exclusiones:
+                                categorias_validas.append(texto)
+                        
+                        if categorias_validas:
+                            resultado['categoria'] = categorias_validas[-1]
+                    except:
+                        pass
+                
+                if self.tienda == "Fravega":
+                    cuotas_encontradas = False
+                    try:
+                        cuotas_divs = soup.find_all('div', class_=lambda x: x and 'sc-3cba7521-0' in x)
+                        
+                        for div in cuotas_divs:
+                            cuotas_span = div.find('span', class_=lambda x: x and 'sc-3cba7521-10' in x)
+                            
+                            if not cuotas_span:
+                                continue
+                            
+                            texto = cuotas_span.get_text()
+                            match = re.search(r'(\d+)\s*cuotas?', texto, re.IGNORECASE)
+                            
+                            if not match:
+                                continue
+                            
+                            num_cuotas = int(match.group(1))
+                            
+                            img_container = div.find('div', class_=lambda x: x and 'sc-3cba7521-3' in x)
+                            
+                            if img_container:
+                                imagenes = img_container.find_all('img', src=True)
+                                
+                                if len(imagenes) >= 2:
+                                    es_visa_master = False
+                                    for img in imagenes[:2]:
+                                        src = img.get('src', '').lower()
+                                        if 'd91d7904a8578' in src or '54c0d769ece1b' in src or \
+                                           'visa' in src or 'mastercard' in src:
+                                            es_visa_master = True
+                                            break
+                                    
+                                    if es_visa_master:
+                                        resultado['cuotas'] = num_cuotas
+                                        cuotas_encontradas = True
+                                        break
+                        
+                        if not cuotas_encontradas:
+                            resultado['cuotas'] = 1
+                            
+                    except Exception as e:
+                        resultado['cuotas'] = 1
+                        resultado['error'] = f"Error cuotas: {str(e)}"
+                
+                if self.tienda == "Galicia" and not resultado['precio_tachado'] and \
+                   resultado['descuento_%'] and resultado['precio_web']:
+                    descuento_decimal = resultado['descuento_%'] / 100
+                    resultado['precio_tachado'] = resultado['precio_web'] / (1 - descuento_decimal)
+                
+                browser.close()
+                
+        except Exception as e:
+            resultado['error'] = f"Playwright error: {str(e)}"
+            resultado['estado_producto'] = 'Error - Scraping fallido'
+        
+        return resultado
     
     def scrape_url(self, url):
+        """Método principal que decide si usar Playwright o requests"""
+        
+        if PLAYWRIGHT_AVAILABLE:
+            if self.tienda == "Fravega":
+                return self.scrape_fravega_con_playwright(url)
+            else:
+                return self.scrape_con_playwright(url)
+        
         resultado = {
             'url': url,
             'titulo': None,
@@ -440,33 +567,6 @@ class WebScraper:
             
             response.raise_for_status()
             soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # DEBUG: Guardar HTML para inspección (solo para Frávega)
-            if self.tienda == "Fravega":
-                # Buscar título de todas las formas posibles
-                h1_all = soup.find_all('h1')
-                titulo_encontrado = None
-                
-                for h1 in h1_all:
-                    texto = h1.get_text(strip=True)
-                    if texto and len(texto) > 10:  # Título real tiene más de 10 caracteres
-                        titulo_encontrado = texto
-                        break
-                
-                if titulo_encontrado:
-                    resultado['titulo'] = titulo_encontrado
-                
-                # Buscar categorías de todas las formas posibles
-                spans_itemprop = soup.find_all('span', {'itemprop': 'name'})
-                if spans_itemprop:
-                    categorias_validas = []
-                    for span in spans_itemprop:
-                        texto = span.get_text(strip=True)
-                        if texto and texto.lower() not in ['frávega', 'fravega', 'inicio', 'home']:
-                            categorias_validas.append(texto)
-                    
-                    if categorias_validas:
-                        resultado['categoria'] = categorias_validas[-1]
             
             html_text = soup.get_text().lower()
             if 'no longer available' in html_text or 'no está disponible' in html_text:
@@ -491,17 +591,11 @@ class WebScraper:
                     if match:
                         resultado['descuento_%'] = float(match.group(1))
             
-            # Verificar si el producto está inhabilitado para la compra
-            boton_compra = soup.select_one('button[data-test-id="product-buy-button"]')
-            if boton_compra and boton_compra.has_attr('disabled'):
-                resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
-            
-            if self.tienda == "Fravega":
-                resultado['cuotas'] = self.extraer_cuotas_fravega(soup)
-            
             if self.tienda == "Galicia" and not resultado['precio_tachado'] and resultado['descuento_%'] and resultado['precio_web']:
                 descuento_decimal = resultado['descuento_%'] / 100
                 resultado['precio_tachado'] = resultado['precio_web'] / (1 - descuento_decimal)
+            
+            resultado['error'] = 'Playwright no disponible - datos limitados'
             
         except requests.exceptions.HTTPError as e:
             if '404' in str(e):
@@ -599,13 +693,11 @@ with st.sidebar:
     
     selected_store = st.selectbox("🏪 Tienda", list(TIENDAS_CONFIG.keys()))
     
-    # Info sobre Playwright para Frávega
-    if selected_store == "Fravega":
-        if not PLAYWRIGHT_AVAILABLE:
-            st.error("⚠️ Playwright requerido para Frávega")
-            st.info("Se instalará automáticamente en Streamlit Cloud")
-        else:
-            st.success("✅ Playwright listo")
+    if not PLAYWRIGHT_AVAILABLE:
+        st.error("⚠️ Playwright requerido para todas las tiendas")
+        st.info("Se instalará automáticamente en Streamlit Cloud")
+    else:
+        st.success("✅ Playwright listo")
     
     price_threshold = st.slider("🎯 Tolerancia (%)", 0, 20, 5, 1)
     
@@ -968,7 +1060,7 @@ with tab3:
 st.markdown("---")
 st.markdown(
     f"""<div style='text-align: center; color: gray;'>
-        v6.0 | {datetime.now().strftime("%d/%m/%Y %H:%M")}
+        v6.1 | Todas las tiendas con Playwright | {datetime.now().strftime("%d/%m/%Y %H:%M")}
     </div>""",
     unsafe_allow_html=True
 )
