@@ -323,9 +323,12 @@ class WebScraper:
                 try:
                     cuotas_containers = page.locator("span.sc-3cba7521-10").all()
                     
-                    for container in cuotas_containers:
+                    # DEBUG: Ver cuántos contenedores encontró
+                    num_containers = len(cuotas_containers)
+                    
+                    for idx, container in enumerate(cuotas_containers):
                         # Buscar el contenedor padre que tiene las imágenes
-                        parent = container.locator("xpath=../..")  # Subir 2 niveles
+                        parent = container.locator("xpath=../..")
                         imagenes = parent.locator("img").all()
                         
                         # Contar imágenes de Visa y Mastercard
@@ -336,14 +339,12 @@ class WebScraper:
                             src = img.get_attribute('src')
                             if src:
                                 src_lower = src.lower()
-                                # Visa: d91d7904a8578
                                 if 'd91d7904a8578' in src_lower:
                                     visa_count += 1
-                                # Mastercard: 54c0d769ece1b
                                 if '54c0d769ece1b' in src_lower:
                                     master_count += 1
                         
-                        # Solo si tiene AMBAS tarjetas (Visa Y Mastercard)
+                        # Solo si tiene AMBAS tarjetas
                         if visa_count >= 1 and master_count >= 1:
                             texto = container.text_content()
                             match = re.search(r'(\d+)\s*cuotas?', texto, re.IGNORECASE)
@@ -352,12 +353,11 @@ class WebScraper:
                                 cuotas_encontradas = True
                                 break
                     
-                    # Si no encontró financiación con ambas tarjetas, es contado
                     if not cuotas_encontradas:
                         resultado['cuotas'] = 1
                 except Exception as e:
-                    # Si hay error en scraping de cuotas, asumir contado
                     resultado['cuotas'] = 1
+                    resultado['error'] = f"Error cuotas: {str(e)}"
                 
                 browser.close()
                 
