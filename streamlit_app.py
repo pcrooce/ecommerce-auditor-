@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import plotly.express as px
-import plotly.graph_objects as go
 from io import BytesIO
 import time
 import requests
@@ -16,48 +15,26 @@ try:
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
-    st.warning("Playwright no instalado. Frávega tendrá funcionalidad limitada.")
 
 try:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Border, Side
 except ImportError:
-    st.error("Instala: pip install openpyxl")
+    st.error("pip install openpyxl")
 
-st.set_page_config(
-    page_title="Auditor Automático",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Auditor", page_icon="🤖", layout="wide")
 
 st.markdown("""
 <style>
-.main {padding: 0rem 1rem;}
 .audit-header {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 2.5rem; border-radius: 15px; color: white;
-    margin-bottom: 2rem; box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-    text-align: center;
-}
-div[data-testid="metric-container"] {
-    background-color: #f8f9fa; border: 2px solid #e9ecef;
-    padding: 15px; border-radius: 10px; margin: 10px 0px;
-}
-.stButton > button {
-    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-    color: white; border: none; padding: 0.5rem 1rem;
-    font-weight: 600; border-radius: 8px;
+    padding: 2rem; border-radius: 15px; color: white;
+    margin-bottom: 2rem; text-align: center;
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<div class="audit-header">
-    <h1>🤖 Sistema de Auditoría Automática v6.0</h1>
-    <p>Con soporte completo para Frávega</p>
-</div>
-""", unsafe_allow_html=True)
+st.markdown('<div class="audit-header"><h1>🤖 Auditor v6.2</h1></div>', unsafe_allow_html=True)
 
 if 'audit_results' not in st.session_state:
     st.session_state.audit_results = None
@@ -95,23 +72,7 @@ TIENDAS_CONFIG = {
     },
     "Fravega": {
         "columnas_busqueda": ["Fravega", "fravega", "FVG"],
-        "columnas_cuotas": ["Cuotas FVG", "CSI FVG", "Financiacion Fvg", "Financiación FVG"],
-        "selector_titulo": "h1[data-test-id='product-title']",
-        "selector_precio": "span.sc-1d9b1d9e-0.sc-faa1a185-3",
-        "selector_precio_tachado": "span.sc-e081bce1-0.sc-faa1a185-4",
-        "selector_descuento": "span.sc-e2aca368-0",
-        "selector_categoria": "span[itemprop='name']",
-        "selector_cuotas_container": "span.sc-3cba7521-10",
-        "urls_visa_master": ["54c0d769ece1b", "d91d7904a8578", "visa", "mastercard"]
-    },
-    "BNA": {
-        "columnas_busqueda": ["BNA", "bna"],
-        "selector_precio": "span.price"
-    },
-    "Megatone": {
-        "columnas_busqueda": ["Megatone", "megatone", "MGT"],
-        "columnas_cuotas": ["Cuotas MGT", "CSI MGT"],
-        "selector_precio": "span.price"
+        "columnas_cuotas": ["Cuotas FVG", "CSI FVG"]
     }
 }
 
@@ -121,37 +82,30 @@ def detectar_columnas_automaticamente(df, tienda):
     
     for col in df.columns:
         col_lower = col.lower()
-        
         if resultado['url'] is None:
             for busqueda in config['columnas_busqueda']:
                 if busqueda.lower() in col_lower and 'url' in col_lower:
                     resultado['url'] = col
                     break
-        
         if resultado['precio'] is None:
             for busqueda in config['columnas_busqueda']:
                 if busqueda.lower() in col_lower and 'precio' in col_lower:
                     resultado['precio'] = col
                     break
-        
         if resultado['sku'] is None:
             if any(word in col_lower for word in ['sku', 'codigo', 'código']):
                 resultado['sku'] = col
-        
         if 'columnas_cuotas' in config and resultado['cuotas'] is None:
             for busqueda in config.get('columnas_cuotas', []):
                 if busqueda.lower() in col_lower:
                     resultado['cuotas'] = col
                     break
-    
     return resultado
 
 def limpiar_precio(valor):
     if pd.isna(valor):
         return np.nan
-    
     precio_str = str(valor).replace('$', '').replace(' ', '').strip()
-    
     if '.' in precio_str and ',' in precio_str:
         precio_str = precio_str.replace('.', '').replace(',', '.')
     elif '.' in precio_str:
@@ -164,7 +118,6 @@ def limpiar_precio(valor):
             precio_str = precio_str.replace(',', '.')
         else:
             precio_str = precio_str.replace(',', '')
-    
     try:
         return float(re.sub(r'[^\d.]', '', precio_str))
     except:
@@ -176,367 +129,212 @@ class WebScraper:
         self.tienda = tienda_nombre
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'es-AR,es;q=0.9,en;q=0.8',
-            'Referer': 'https://www.google.com/'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
     
-    def scrape_fravega_con_playwright(self, url):
-        """Scrapea Frávega usando Playwright para contenido dinámico"""
-        
-        # VALIDACIÓN: URL debe ser válida
-        if not url or not isinstance(url, str):
+    def scrape_fravega_playwright(self, url):
+        if not url.startswith('http'):
             return {
-                'url': url,
-                'titulo': None,
-                'precio_web': None,
-                'precio_tachado': None,
-                'descuento_%': None,
-                'categoria': None,
-                'cuotas': None,
-                'estado_producto': 'Error - URL inválida',
-                'error': 'URL vacía o inválida',
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-        
-        # VALIDACIÓN: URL debe comenzar con http:// o https://
-        if not url.startswith('http://') and not url.startswith('https://'):
-            return {
-                'url': url,
-                'titulo': None,
-                'precio_web': None,
-                'precio_tachado': None,
-                'descuento_%': None,
-                'categoria': None,
-                'cuotas': None,
-                'estado_producto': 'Error - URL incompleta',
-                'error': 'URL debe comenzar con https://',
+                'url': url, 'titulo': None, 'precio_web': None, 'precio_tachado': None,
+                'descuento_%': None, 'categoria': None, 'cuotas': None,
+                'estado_producto': 'Error - URL incompleta', 'error': 'URL debe tener https://',
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
         
         resultado = {
-            'url': url,
-            'titulo': None,
-            'precio_web': None,
-            'precio_tachado': None,
-            'descuento_%': None,
-            'categoria': None,
-            'cuotas': None,
-            'estado_producto': 'Activo',
-            'error': None,
+            'url': url, 'titulo': None, 'precio_web': None, 'precio_tachado': None,
+            'descuento_%': None, 'categoria': None, 'cuotas': None,
+            'estado_producto': 'Activo', 'error': None,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
-                context = browser.new_context(
-                    viewport={'width': 1920, 'height': 1080},
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                )
-                page = context.new_page()
-                
+                page = browser.new_page()
                 page.goto(url, wait_until='networkidle', timeout=30000)
-                page.wait_for_timeout(3000)  # Aumentado a 3 segundos
+                page.wait_for_timeout(3000)
                 
-                # PRIMERO: Verificar si está inhabilitado (múltiples métodos)
-                producto_inhabilitado = False
+                # Verificar inhabilitado
                 try:
-                    # Método 1: Verificar atributo disabled del botón
                     boton = page.locator("button[data-test-id='product-buy-button']").first
-                    
-                    # Esperar a que el botón aparezca
                     boton.wait_for(timeout=5000)
-                    
-                    # Verificar si está deshabilitado
-                    is_disabled = boton.is_disabled()
-                    has_disabled_attr = boton.get_attribute('disabled') is not None
-                    
-                    if is_disabled or has_disabled_attr:
-                        producto_inhabilitado = True
-                        resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
-                    
-                    # Método 2: Verificar el texto del botón (a veces dice "No disponible")
-                    texto_boton = boton.text_content()
-                    if texto_boton and 'no disponible' in texto_boton.lower():
-                        producto_inhabilitado = True
-                        resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
-                        
-                except Exception as e:
-                    # Si no encontramos el botón, el producto podría no existir
-                    pass
-                
-                # Título (siempre intentar obtener)
-                try:
-                    titulo = page.locator("h1[data-test-id='product-title']").text_content(timeout=5000)
-                    if titulo:
-                        resultado['titulo'] = titulo.strip()
+                    if boton.is_disabled() or boton.get_attribute('disabled'):
+                        resultado['estado_producto'] = 'A corregir - Inhabilitado'
+                        resultado['cuotas'] = None
                 except:
                     pass
                 
-                # Categorías (siempre intentar obtener)
+                # Título
                 try:
-                    categorias_elems = page.locator("span[itemprop='name']").all()
-                    categorias_validas = []
-                    for elem in categorias_elems:
-                        texto = elem.text_content().strip()
-                        if texto and texto.lower() not in ['frávega', 'fravega', 'inicio', 'home']:
-                            categorias_validas.append(texto)
-                    
-                    if categorias_validas:
-                        resultado['categoria'] = categorias_validas[-1]
+                    resultado['titulo'] = page.locator("h1[data-test-id='product-title']").text_content(timeout=5000).strip()
                 except:
                     pass
                 
-                # Si está inhabilitado, NO intentar scrapear precios/cuotas
-                if producto_inhabilitado:
-                    resultado['cuotas'] = None  # No hay cuotas disponibles
+                # Categoría
+                try:
+                    cats = page.locator("span[itemprop='name']").all()
+                    validas = [c.text_content().strip() for c in cats if c.text_content().strip().lower() not in ['frávega', 'fravega', 'inicio']]
+                    if validas:
+                        resultado['categoria'] = validas[-1]
+                except:
+                    pass
+                
+                if resultado['estado_producto'] != 'Activo':
                     browser.close()
                     return resultado
                 
-                # Precio (solo si está habilitado)
+                # Precios
                 try:
-                    precio = page.locator("span.sc-1d9b1d9e-0.sc-faa1a185-3").first.text_content(timeout=5000)
-                    resultado['precio_web'] = limpiar_precio(precio)
+                    resultado['precio_web'] = limpiar_precio(page.locator("span.sc-1d9b1d9e-0.sc-faa1a185-3").first.text_content(timeout=5000))
+                except:
+                    pass
+                try:
+                    resultado['precio_tachado'] = limpiar_precio(page.locator("span.sc-e081bce1-0.sc-faa1a185-4").first.text_content(timeout=5000))
+                except:
+                    pass
+                try:
+                    desc = page.locator("span.sc-e2aca368-0").first.text_content(timeout=5000)
+                    m = re.search(r'(\d+)', desc)
+                    if m:
+                        resultado['descuento_%'] = float(m.group(1))
                 except:
                     pass
                 
-                # Precio tachado
+                # Cuotas - CRÍTICO
                 try:
-                    tachado = page.locator("span.sc-e081bce1-0.sc-faa1a185-4").first.text_content(timeout=5000)
-                    resultado['precio_tachado'] = limpiar_precio(tachado)
-                except:
-                    pass
-                
-                # Descuento
-                try:
-                    descuento = page.locator("span.sc-e2aca368-0").first.text_content(timeout=5000)
-                    match = re.search(r'(\d+)', descuento)
-                    if match:
-                        resultado['descuento_%'] = float(match.group(1))
-                except:
-                    pass
-                
-                # Cuotas con Visa/Mastercard
-                cuotas_encontradas = False
-                try:
-                    page_content = page.content()
-                    soup = BeautifulSoup(page_content, 'html.parser')
+                    html = page.content()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    divs = soup.find_all('div', class_=lambda x: x and 'sc-3cba7521-0' in x)
                     
-                    # Buscar todos los divs con clase sc-3cba7521-0 que contienen info de cuotas
-                    cuotas_divs = soup.find_all('div', class_=lambda x: x and 'sc-3cba7521-0' in x)
-                    
-                    for div in cuotas_divs:
-                        # Buscar el span con el texto de cuotas dentro
-                        cuotas_span = div.find('span', class_=lambda x: x and 'sc-3cba7521-10' in x)
-                        
-                        if not cuotas_span:
+                    for div in divs:
+                        span = div.find('span', class_=lambda x: x and 'sc-3cba7521-10' in x)
+                        if not span:
                             continue
                         
-                        texto = cuotas_span.get_text()
-                        match = re.search(r'(\d+)\s*cuotas?', texto, re.IGNORECASE)
-                        
+                        texto = span.get_text()
+                        match = re.search(r'(\d+)\s*cuotas', texto, re.IGNORECASE)
                         if not match:
                             continue
                         
-                        num_cuotas = int(match.group(1))
+                        num = int(match.group(1))
+                        img_div = div.find('div', class_=lambda x: x and 'sc-3cba7521-3' in x)
                         
-                        # Buscar el div con las imágenes (sc-3cba7521-3)
-                        img_container = div.find('div', class_=lambda x: x and 'sc-3cba7521-3' in x)
-                        
-                        if img_container:
-                            imagenes = img_container.find_all('img', src=True)
+                        if img_div:
+                            imgs = img_div.find_all('img', src=True)
+                            visa = any('d91d7904a8578' in img.get('src', '') for img in imgs)
+                            master = any('54c0d769ece1b' in img.get('src', '') for img in imgs)
                             
-                            visa_found = False
-                            master_found = False
-                            
-                            for img in imagenes:
-                                src = img.get('src', '')
-                                # Visa: d91d7904a8578
-                                if 'd91d7904a8578' in src:
-                                    visa_found = True
-                                # Mastercard: 54c0d769ece1b
-                                if '54c0d769ece1b' in src:
-                                    master_found = True
-                            
-                            # Si tiene AMBAS tarjetas (Visa Y Mastercard)
-                            if visa_found and master_found:
-                                resultado['cuotas'] = num_cuotas
-                                cuotas_encontradas = True
+                            if visa and master:
+                                resultado['cuotas'] = num
                                 break
                     
-                    if not cuotas_encontradas:
+                    if not resultado.get('cuotas'):
                         resultado['cuotas'] = 1
-                        
                 except Exception as e:
                     resultado['cuotas'] = 1
-                    resultado['error'] = f"Error cuotas: {str(e)}"
+                    resultado['error'] = f"Cuotas: {str(e)}"
                 
                 browser.close()
-                
         except Exception as e:
-            resultado['error'] = f"Playwright error: {str(e)}"
+            resultado['error'] = f"Playwright: {str(e)}"
             resultado['estado_producto'] = 'Error - Scraping fallido'
         
         return resultado
     
-    def extraer_cuotas_fravega(self, soup):
-        if 'selector_cuotas_container' not in self.config:
-            return None
-        
-        cuotas_containers = soup.select(self.config['selector_cuotas_container'])
-        
-        for container in cuotas_containers:
-            # Buscar el div padre que contiene las imágenes
-            parent = container.find_parent()
-            if not parent:
-                parent = container
-            
-            # Buscar específicamente el div hermano con las imágenes
-            parent_wrapper = parent.find_parent()
-            if parent_wrapper:
-                imagenes = parent_wrapper.find_all('img', src=True)
-            else:
-                imagenes = parent.find_all('img', src=True)
-            
-            # Contar cuántas imágenes de Visa/Mastercard hay
-            visa_master_count = 0
-            for img in imagenes:
-                src = img.get('src', '').lower()
-                # Buscar las URLs exactas de Visa y Mastercard de Frávega
-                if 'd91d7904a8578' in src or '54c0d769ece1b' in src:
-                    visa_master_count += 1
-            
-            # Solo considerar si tiene AMBAS (Visa Y Mastercard)
-            if visa_master_count >= 2:
-                texto = container.get_text()
-                match = re.search(r'(\d+)\s*cuotas?', texto, re.IGNORECASE)
-                if match:
-                    return int(match.group(1))
-        
-        return 1
-    
     def scrape_url(self, url):
+        if not url or not isinstance(url, str) or not url.startswith('http'):
+            return {
+                'url': url, 'titulo': None, 'precio_web': None, 'precio_tachado': None,
+                'descuento_%': None, 'categoria': None, 'cuotas': None,
+                'estado_producto': 'Error - URL inválida', 'error': 'URL incorrecta',
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+        
+        if self.tienda == "Fravega" and PLAYWRIGHT_AVAILABLE:
+            return self.scrape_fravega_playwright(url)
+        
         resultado = {
-            'url': url,
-            'titulo': None,
-            'precio_web': None,
-            'precio_tachado': None,
-            'descuento_%': None,
-            'categoria': None,
-            'cuotas': None,
-            'estado_producto': 'Activo',
-            'error': None,
+            'url': url, 'titulo': None, 'precio_web': None, 'precio_tachado': None,
+            'descuento_%': None, 'categoria': None, 'cuotas': None,
+            'estado_producto': 'Activo', 'error': None,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         
         try:
-            response = self.session.get(url, timeout=15)
-            
-            if response.status_code == 404:
-                resultado['estado_producto'] = 'No disponible en el front'
+            resp = self.session.get(url, timeout=15)
+            if resp.status_code == 404:
+                resultado['estado_producto'] = 'No disponible'
                 return resultado
             
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, 'html.parser')
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.content, 'html.parser')
             
-            # DEBUG: Guardar HTML para inspección (solo para Frávega)
-            if self.tienda == "Fravega":
-                # Buscar título de todas las formas posibles
-                h1_all = soup.find_all('h1')
-                titulo_encontrado = None
-                
-                for h1 in h1_all:
-                    texto = h1.get_text(strip=True)
-                    if texto and len(texto) > 10:  # Título real tiene más de 10 caracteres
-                        titulo_encontrado = texto
-                        break
-                
-                if titulo_encontrado:
-                    resultado['titulo'] = titulo_encontrado
-                
-                # Buscar categorías de todas las formas posibles
-                spans_itemprop = soup.find_all('span', {'itemprop': 'name'})
-                if spans_itemprop:
-                    categorias_validas = []
-                    for span in spans_itemprop:
-                        texto = span.get_text(strip=True)
-                        if texto and texto.lower() not in ['frávega', 'fravega', 'inicio', 'home']:
-                            categorias_validas.append(texto)
-                    
-                    if categorias_validas:
-                        resultado['categoria'] = categorias_validas[-1]
-            
-            html_text = soup.get_text().lower()
-            if 'no longer available' in html_text or 'no está disponible' in html_text:
-                resultado['estado_producto'] = 'No disponible en el front'
+            if 'no longer available' in soup.get_text().lower():
+                resultado['estado_producto'] = 'No disponible'
                 return resultado
             
+            # Título
+            if 'selector_titulo' in self.config:
+                elem = soup.select_one(self.config['selector_titulo'])
+                if elem:
+                    resultado['titulo'] = elem.get_text(strip=True)
+            
+            # Precio
             if 'selector_precio' in self.config:
-                precio_elem = soup.select_one(self.config['selector_precio'])
-                if precio_elem:
-                    resultado['precio_web'] = limpiar_precio(precio_elem.get_text(strip=True))
+                elem = soup.select_one(self.config['selector_precio'])
+                if elem:
+                    resultado['precio_web'] = limpiar_precio(elem.get_text(strip=True))
             
+            # Precio tachado
             if 'selector_precio_tachado' in self.config:
-                tachado_elem = soup.select_one(self.config['selector_precio_tachado'])
-                if tachado_elem:
-                    resultado['precio_tachado'] = limpiar_precio(tachado_elem.get_text(strip=True))
+                elem = soup.select_one(self.config['selector_precio_tachado'])
+                if elem:
+                    resultado['precio_tachado'] = limpiar_precio(elem.get_text(strip=True))
             
+            # Descuento
             if 'selector_descuento' in self.config:
-                desc_elem = soup.select_one(self.config['selector_descuento'])
-                if desc_elem:
-                    desc_text = desc_elem.get_text(strip=True)
-                    match = re.search(r'(\d+)', desc_text)
-                    if match:
-                        resultado['descuento_%'] = float(match.group(1))
+                elem = soup.select_one(self.config['selector_descuento'])
+                if elem:
+                    texto = elem.get_text(strip=True)
+                    m = re.search(r'(\d+)', texto)
+                    if m:
+                        resultado['descuento_%'] = float(m.group(1))
             
-            # Verificar si el producto está inhabilitado para la compra
-            boton_compra = soup.select_one('button[data-test-id="product-buy-button"]')
-            if boton_compra and boton_compra.has_attr('disabled'):
-                resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
+            # Categoría
+            if 'selector_categoria' in self.config:
+                elems = soup.select(self.config['selector_categoria'])
+                validas = [e.get_text(strip=True) for e in elems if e.get_text(strip=True).lower() not in ['inicio', 'home', self.tienda.lower()]]
+                if validas:
+                    resultado['categoria'] = validas[-1]
             
-            if self.tienda == "Fravega":
-                resultado['cuotas'] = self.extraer_cuotas_fravega(soup)
-            
+            # Galicia: calcular tachado
             if self.tienda == "Galicia" and not resultado['precio_tachado'] and resultado['descuento_%'] and resultado['precio_web']:
-                descuento_decimal = resultado['descuento_%'] / 100
-                resultado['precio_tachado'] = resultado['precio_web'] / (1 - descuento_decimal)
-            
-        except requests.exceptions.HTTPError as e:
-            if '404' in str(e):
-                resultado['estado_producto'] = 'No disponible en el front'
-            else:
-                resultado['error'] = str(e)
+                resultado['precio_tachado'] = resultado['precio_web'] / (1 - resultado['descuento_%'] / 100)
+        
         except Exception as e:
             resultado['error'] = str(e)
         
         return resultado
 
-def realizar_scraping(df_tienda, tienda_config, tienda_nombre, progress_bar, status_text):
-    scraper = WebScraper(tienda_config, tienda_nombre)
+def realizar_scraping(df, config, tienda, pb, st_text):
+    scraper = WebScraper(config, tienda)
     resultados = []
     
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(scraper.scrape_url, row['url']): idx 
-                  for idx, row in df_tienda.iterrows() if pd.notna(row.get('url'))}
-        
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futures = {ex.submit(scraper.scrape_url, row['url']): idx for idx, row in df.iterrows() if pd.notna(row.get('url'))}
         completed = 0
-        total = len(futures)
-        
         for future in as_completed(futures):
             completed += 1
             idx = futures[future]
-            resultado = future.result()
-            resultado['idx'] = idx
-            resultados.append(resultado)
-            
-            progress_bar.progress(min(completed / total, 1.0))
-            status_text.text(f"Escaneando {completed}/{total}...")
-    
+            res = future.result()
+            res['idx'] = idx
+            resultados.append(res)
+            pb.progress(min(completed / len(futures), 1.0))
+            st_text.text(f"{completed}/{len(futures)}...")
     return resultados
 
-def crear_excel_formateado(df_results, tienda):
+def crear_excel(df, tienda):
     output = BytesIO()
     wb = Workbook()
     ws = wb.active
@@ -546,241 +344,186 @@ def crear_excel_formateado(df_results, tienda):
     ws['A1'].font = Font(bold=True, size=14)
     
     if tienda in ["Fravega", "Megatone"]:
-        columnas = ['SKU', 'Título', 'Precio Maestro', 'Precio Web', 'Precio Tachado',
-                   'Descuento %', 'Variación %', 'Precio OK', 'Cuotas Web', 'Cuotas Maestro',
-                   'Cuotas OK', 'Categoría', 'Estado Producto', 'Estado Scraping', 'URL']
+        cols = ['SKU', 'Título', 'Precio Maestro', 'Precio Web', 'Precio Tachado',
+               'Descuento %', 'Variación %', 'Precio OK', 'Cuotas Web', 'Cuotas Maestro',
+               'Cuotas OK', 'Categoría', 'Estado Producto', 'Estado Scraping', 'URL']
         ws.merge_cells('A1:O1')
     else:
-        columnas = ['SKU', 'Título', 'Precio Maestro', 'Precio Web', 'Precio Tachado',
-                   'Descuento %', 'Variación %', 'Precio OK', 'Categoría', 'Estado Producto', 
-                   'Estado Scraping', 'URL']
+        cols = ['SKU', 'Título', 'Precio Maestro', 'Precio Web', 'Precio Tachado',
+               'Descuento %', 'Variación %', 'Precio OK', 'Categoría', 'Estado Producto',
+               'Estado Scraping', 'URL']
         ws.merge_cells('A1:L1')
     
     ws.append([])
-    ws.append(columnas)
+    ws.append(cols)
     
     for cell in ws[3]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill(start_color="667EEA", end_color="667EEA", fill_type="solid")
     
-    for _, row in df_results.iterrows():
+    for _, row in df.iterrows():
         if tienda in ["Fravega", "Megatone"]:
-            row_data = [
-                row.get('sku'), row.get('titulo'), row.get('precio_maestro'),
-                row.get('precio_web'), row.get('precio_tachado'), row.get('descuento_%'),
-                row.get('variacion_precio_%'), 'Sí' if row.get('precio_ok') else 'No',
-                row.get('cuotas'), row.get('cuotas_maestro'),
-                'Sí' if row.get('cuotas_correctas') else 'No',
-                row.get('categoria'), row.get('estado_producto'), 
-                row.get('estado_scraping'), row.get('url')
-            ]
+            data = [row.get('sku'), row.get('titulo'), row.get('precio_maestro'),
+                   row.get('precio_web'), row.get('precio_tachado'), row.get('descuento_%'),
+                   row.get('variacion_precio_%'), 'Sí' if row.get('precio_ok') else 'No',
+                   row.get('cuotas'), row.get('cuotas_maestro'),
+                   'Sí' if row.get('cuotas_correctas') else 'No',
+                   row.get('categoria'), row.get('estado_producto'),
+                   row.get('estado_scraping'), row.get('url')]
         else:
-            row_data = [
-                row.get('sku'), row.get('titulo'), row.get('precio_maestro'),
-                row.get('precio_web'), row.get('precio_tachado'), row.get('descuento_%'),
-                row.get('variacion_precio_%'), 'Sí' if row.get('precio_ok') else 'No',
-                row.get('categoria'), row.get('estado_producto'),
-                row.get('estado_scraping'), row.get('url')
-            ]
-        ws.append(row_data)
+            data = [row.get('sku'), row.get('titulo'), row.get('precio_maestro'),
+                   row.get('precio_web'), row.get('precio_tachado'), row.get('descuento_%'),
+                   row.get('variacion_precio_%'), 'Sí' if row.get('precio_ok') else 'No',
+                   row.get('categoria'), row.get('estado_producto'),
+                   row.get('estado_scraping'), row.get('url')]
+        ws.append(data)
     
     wb.save(output)
     output.seek(0)
     return output
 
 with st.sidebar:
-    st.markdown("""
-        <div style='text-align: center; padding: 1rem; 
-             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-             border-radius: 10px; margin-bottom: 1rem;'>
-            <h2 style='color: white; margin: 0;'>⚙️ Panel</h2>
-        </div>
-    """, unsafe_allow_html=True)
-    
+    st.markdown('<div style="text-align:center; padding:1rem; background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius:10px;"><h2 style="color:white;">⚙️ Panel</h2></div>', unsafe_allow_html=True)
     selected_store = st.selectbox("🏪 Tienda", list(TIENDAS_CONFIG.keys()))
     
-    # Info sobre Playwright para Frávega
-    if selected_store == "Fravega":
-        if not PLAYWRIGHT_AVAILABLE:
-            st.error("⚠️ Playwright requerido para Frávega")
-            st.info("Se instalará automáticamente en Streamlit Cloud")
-        else:
-            st.success("✅ Playwright listo")
+    if selected_store == "Fravega" and not PLAYWRIGHT_AVAILABLE:
+        st.error("Playwright requerido")
     
     price_threshold = st.slider("🎯 Tolerancia (%)", 0, 20, 5, 1)
+    modo = st.radio("🚀 Modo", ["🧪 Prueba", "⚡ Rápida (10)", "📊 Completa"])
     
-    modo_operacion = st.radio("🚀 Modo", [
-        "🧪 Prueba (simulado)",
-        "⚡ Rápida (10 productos)", 
-        "📊 Completa"
-    ])
-    
-    if "Prueba" in modo_operacion:
-        modo_operacion = "Modo Prueba"
-        max_productos = 10
-    elif "Rápida" in modo_operacion:
-        modo_operacion = "Auditoría Rápida"
-        max_productos = 10
+    if "Completa" in modo:
+        max_prod = st.number_input("Límite:", 10, 1000, 100, 10)
     else:
-        modo_operacion = "Auditoría Completa"
-        max_productos = st.number_input("Límite:", 10, 1000, 100, 10)
+        max_prod = 10
 
 tab1, tab2, tab3 = st.tabs(["📁 Cargar", "📊 Resultados", "📈 Dashboard"])
 
 with tab1:
     st.markdown("### 📝 Auditoría")
+    uploaded = st.file_uploader("Excel", type=['xlsx', 'xls'])
     
-    uploaded_file = st.file_uploader("Cargar Excel", type=['xlsx', 'xls'])
-    
-    if uploaded_file:
-        df_maestro = pd.read_excel(uploaded_file)
-        
+    if uploaded:
+        df_maestro = pd.read_excel(uploaded)
         col1, col2, col3 = st.columns(3)
-        col1.metric("📄 Archivo", uploaded_file.name[:15] + "...")
-        col2.metric("📊 Filas", f"{len(df_maestro):,}")
-        col3.metric("📋 Columnas", len(df_maestro.columns))
+        col1.metric("Archivo", uploaded.name[:15])
+        col2.metric("Filas", len(df_maestro))
+        col3.metric("Columnas", len(df_maestro.columns))
         
-        columnas_detectadas = detectar_columnas_automaticamente(df_maestro, selected_store)
+        cols_det = detectar_columnas_automaticamente(df_maestro, selected_store)
         
-        st.markdown("### ✅ Columnas")
-        
+        st.markdown("### Columnas")
         col1, col2 = st.columns(2)
         
         with col1:
-            if columnas_detectadas['url']:
-                st.success(f"✅ URL: `{columnas_detectadas['url']}`")
-                url_column = columnas_detectadas['url']
-            else:
-                st.error("❌ URL no detectada")
-                url_column = st.selectbox("URL:", df_maestro.columns)
-            
-            if columnas_detectadas['sku']:
-                st.success(f"✅ SKU: `{columnas_detectadas['sku']}`")
-                sku_column = columnas_detectadas['sku']
-            else:
-                sku_column = st.selectbox("SKU:", df_maestro.columns)
+            url_col = cols_det['url'] if cols_det['url'] else st.selectbox("URL:", df_maestro.columns)
+            sku_col = cols_det['sku'] if cols_det['sku'] else st.selectbox("SKU:", df_maestro.columns)
         
         with col2:
-            if columnas_detectadas['precio']:
-                st.success(f"✅ Precio: `{columnas_detectadas['precio']}`")
-                precio_column = columnas_detectadas['precio']
-            else:
-                precio_column = st.selectbox("Precio:", df_maestro.columns)
-            
+            precio_col = cols_det['precio'] if cols_det['precio'] else st.selectbox("Precio:", df_maestro.columns)
+            cuotas_col = None
             if selected_store in ["Fravega", "Megatone"]:
-                if columnas_detectadas['cuotas']:
-                    st.success(f"✅ Cuotas: `{columnas_detectadas['cuotas']}`")
-                    cuotas_column = columnas_detectadas['cuotas']
-                else:
-                    cuotas_column = st.selectbox("Cuotas:", df_maestro.columns)
-            else:
-                cuotas_column = None
+                cuotas_col = cols_det['cuotas'] if cols_det['cuotas'] else st.selectbox("Cuotas:", df_maestro.columns)
         
-        df_tienda = df_maestro[df_maestro[url_column].notna()].copy()
+        df_t = df_maestro[df_maestro[url_col].notna()].copy()
+        rename = {url_col: 'url', sku_col: 'sku', precio_col: 'precio_maestro'}
+        if cuotas_col:
+            rename[cuotas_col] = 'cuotas_maestro'
+        df_t = df_t.rename(columns=rename)
+        df_t['precio_maestro'] = df_t['precio_maestro'].apply(limpiar_precio)
+        if 'cuotas_maestro' in df_t.columns:
+            df_t['cuotas_maestro'] = pd.to_numeric(df_t['cuotas_maestro'], errors='coerce')
         
-        rename_dict = {url_column: 'url', sku_column: 'sku', precio_column: 'precio_maestro'}
-        if cuotas_column:
-            rename_dict[cuotas_column] = 'cuotas_maestro'
-        
-        df_tienda = df_tienda.rename(columns=rename_dict)
-        df_tienda['precio_maestro'] = df_tienda['precio_maestro'].apply(limpiar_precio)
-        
-        if 'cuotas_maestro' in df_tienda.columns:
-            df_tienda['cuotas_maestro'] = pd.to_numeric(df_tienda['cuotas_maestro'], errors='coerce')
-        
-        df_tienda = df_tienda.head(max_productos)
-        
-        st.markdown("---")
+        df_t = df_t.head(max_prod if "Completa" in modo else 10)
         
         if st.button("🚀 INICIAR", type="primary", use_container_width=True):
-            
-            if "Prueba" in modo_operacion:
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                resultados = []
-                for i, (idx, row) in enumerate(df_tienda.iterrows()):
-                    variacion = np.random.uniform(-10, 10)
-                    precio_maestro_val = row.get('precio_maestro', 10000)
-                    if pd.isna(precio_maestro_val):
-                        precio_maestro_val = 10000
-                    
-                    precio_web = float(precio_maestro_val * (1 + variacion/100))
-                    
-                    resultados.append({
-                        'idx': idx,
-                        'url': row['url'],
-                        'titulo': f"Producto {i+1}",
-                        'precio_web': precio_web,
-                        'precio_tachado': precio_web * 1.3,
+            if "Prueba" in modo:
+                pb = st.progress(0)
+                status = st.empty()
+                res = []
+                for i, (idx, row) in enumerate(df_t.iterrows()):
+                    var = np.random.uniform(-10, 10)
+                    pm = row.get('precio_maestro', 10000)
+                    if pd.isna(pm):
+                        pm = 10000
+                    pw = float(pm * (1 + var/100))
+                    res.append({
+                        'idx': idx, 'url': row['url'],
+                        'titulo': f"Producto {row.get('sku', i+1)}",
+                        'precio_web': pw, 'precio_tachado': pw * 1.3,
                         'descuento_%': np.random.randint(10, 40),
-                        'categoria': "Categoría",
+                        'categoria': "Prueba",
                         'cuotas': np.random.choice([1, 3, 6, 9, 12]) if selected_store == "Fravega" else None,
-                        'estado_producto': 'Activo',
-                        'error': None
+                        'estado_producto': 'Activo', 'error': None
                     })
-                    
-                    progress_bar.progress((i + 1) / len(df_tienda))
-                    status_text.text(f"{i + 1}/{len(df_tienda)}")
+                    pb.progress((i + 1) / len(df_t))
+                    status.text(f"{i + 1}/{len(df_t)}")
                     time.sleep(0.05)
-                
-                progress_bar.empty()
-                status_text.empty()
+                pb.empty()
+                status.empty()
             else:
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                resultados = realizar_scraping(
-                    df_tienda, 
-                    TIENDAS_CONFIG[selected_store], 
-                    selected_store, 
-                    progress_bar, 
-                    status_text
-                )
-                
-                progress_bar.empty()
-                status_text.empty()
+                pb = st.progress(0)
+                status = st.empty()
+                res = realizar_scraping(df_t, TIENDAS_CONFIG[selected_store], selected_store, pb, status)
+                pb.empty()
+                status.empty()
             
-            for resultado in resultados:
-                idx = resultado['idx']
-                df_tienda.loc[idx, 'titulo'] = resultado.get('titulo')
-                df_tienda.loc[idx, 'precio_web'] = resultado.get('precio_web')
-                df_tienda.loc[idx, 'precio_tachado'] = resultado.get('precio_tachado')
-                df_tienda.loc[idx, 'descuento_%'] = resultado.get('descuento_%')
-                df_tienda.loc[idx, 'categoria'] = resultado.get('categoria')
-                df_tienda.loc[idx, 'cuotas'] = resultado.get('cuotas')
-                df_tienda.loc[idx, 'estado_producto'] = resultado.get('estado_producto')
+            for r in res:
+                idx = r['idx']
+                df_t.loc[idx, 'titulo'] = r.get('titulo')
+                df_t.loc[idx, 'precio_web'] = r.get('precio_web')
+                df_t.loc[idx, 'precio_tachado'] = r.get('precio_tachado')
+                df_t.loc[idx, 'descuento_%'] = r.get('descuento_%')
+                df_t.loc[idx, 'categoria'] = r.get('categoria')
+                df_t.loc[idx, 'cuotas'] = r.get('cuotas')
+                df_t.loc[idx, 'estado_producto'] = r.get('estado_producto')
+                df_t.loc[idx, 'error_scraping'] = r.get('error')
             
-            mask = (df_tienda['precio_web'].notna()) & (df_tienda['precio_maestro'].notna()) & (df_tienda['precio_maestro'] != 0)
-            df_tienda['variacion_precio_%'] = 0.0
+            df_t['variacion_precio_%'] = 0.0
+            mask = (df_t['precio_web'].notna()) & (df_t['precio_maestro'].notna()) & (df_t['precio_maestro'] != 0)
             
             if mask.any():
-                df_tienda.loc[mask, 'variacion_precio_%'] = (
-                    (df_tienda.loc[mask, 'precio_web'] - df_tienda.loc[mask, 'precio_maestro']) / 
-                    df_tienda.loc[mask, 'precio_maestro'] * 100
-                ).round(2)
+                df_t.loc[mask, 'precio_web'] = pd.to_numeric(df_t.loc[mask, 'precio_web'], errors='coerce')
+                df_t.loc[mask, 'precio_maestro'] = pd.to_numeric(df_t.loc[mask, 'precio_maestro'], errors='coerce')
+                mask = (df_t['precio_web'].notna()) & (df_t['precio_maestro'].notna()) & (df_t['precio_maestro'] != 0)
+                if mask.any():
+                    df_t.loc[mask, 'variacion_precio_%'] = ((df_t.loc[mask, 'precio_web'] - df_t.loc[mask, 'precio_maestro']) / df_t.loc[mask, 'precio_maestro'] * 100).round(2)
             
-            df_tienda['precio_ok'] = abs(df_tienda['variacion_precio_%']) <= price_threshold
+            df_t['precio_ok'] = False
+            df_t.loc[mask, 'precio_ok'] = abs(df_t.loc[mask, 'variacion_precio_%']) <= price_threshold
             
-            if selected_store in ["Fravega", "Megatone"] and 'cuotas_maestro' in df_tienda.columns:
-                df_tienda['cuotas_correctas'] = df_tienda['cuotas'] == df_tienda['cuotas_maestro']
+            if selected_store in ["Fravega", "Megatone"] and 'cuotas_maestro' in df_t.columns:
+                df_t['cuotas_correctas'] = False
+                mask_c = df_t['cuotas'].notna()
+                df_t.loc[mask_c, 'cuotas_correctas'] = df_t.loc[mask_c, 'cuotas'] == df_t.loc[mask_c, 'cuotas_maestro']
             else:
-                df_tienda['cuotas_correctas'] = True
+                df_t['cuotas_correctas'] = True
             
-            st.session_state.audit_results = df_tienda
+            def eval_scrap(r):
+                if pd.notna(r.get('error_scraping')):
+                    return '❌ Error'
+                estado = r.get('estado_producto', 'Activo')
+                if 'Error' in estado:
+                    return '❌ Error'
+                if 'Inhabilitado' in estado:
+                    return '⚠️ Parcial (Inhabilitado)' if pd.notna(r.get('titulo')) else '⚠️ Incompleto'
+                if 'No disponible' in estado:
+                    return '⚠️ No disponible'
+                if pd.notna(r.get('titulo')) and pd.notna(r.get('precio_web')) and pd.notna(r.get('categoria')):
+                    return '✅ Completo'
+                elif pd.notna(r.get('precio_web')):
+                    return '⚠️ Parcial'
+                else:
+                    return '❌ Fallido'
             
-            st.success(f"✅ Completado: {len(df_tienda)} productos")
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("✅ OK", len(df_tienda[df_tienda['precio_ok'] == True]))
-            col2.metric("❌ Errores", len(df_tienda[(df_tienda['precio_ok'] == False) & df_tienda['precio_web'].notna()]))
-            col3.metric("⚠️ No disp.", len(df_tienda[df_tienda['estado_producto'] == 'No disponible en el front']))
+            df_t['estado_scraping'] = df_t.apply(eval_scrap, axis=1)
+            st.session_state.audit_results = df_t
+            st.success(f"✅ Completado: {len(df_t)} productos")
 
 with tab2:
     if st.session_state.audit_results is not None:
-        df_results = st.session_state.audit_results
-        
-        st.markdown("### 📊 Resultados")
+        df_r = st.session_state.audit_results
+        st.markdown("### Resultados")
         
         col1, col2 = st.columns([3, 1])
         with col1:
@@ -789,25 +532,25 @@ with tab2:
                 filtros.append("Cuotas incorrectas")
             filtro = st.selectbox("Filtrar:", filtros)
         
-        df_mostrar = df_results.copy()
-        
+        df_m = df_r.copy()
         if filtro == "Errores":
-            df_mostrar = df_mostrar[(df_mostrar['precio_ok'] == False) & df_mostrar['precio_web'].notna()]
+            df_m = df_m[(df_m['precio_ok'] == False) & df_m['precio_web'].notna()]
         elif filtro == "No disponibles":
-            df_mostrar = df_mostrar[df_mostrar['estado_producto'] == 'No disponible en el front']
+            df_m = df_m[df_m['estado_producto'].str.contains('No disponible', na=False)]
         elif filtro == "Cuotas incorrectas":
-            df_mostrar = df_mostrar[df_mostrar['cuotas_correctas'] == False]
+            df_m = df_m[df_m['cuotas_correctas'] == False]
         
-        columnas_mostrar = ['sku', 'titulo', 'precio_maestro', 'precio_web', 'precio_tachado',
-                           'descuento_%', 'variacion_precio_%', 'precio_ok', 'categoria', 'estado_producto']
+        cols_m = ['sku', 'titulo', 'precio_maestro', 'precio_web', 'precio_tachado',
+                 'descuento_%', 'variacion_precio_%', 'precio_ok', 'categoria',
+                 'estado_producto', 'estado_scraping']
         
         if selected_store in ["Fravega", "Megatone"]:
-            columnas_mostrar.insert(8, 'cuotas_maestro')
-            columnas_mostrar.insert(9, 'cuotas')
-            columnas_mostrar.insert(10, 'cuotas_correctas')
+            cols_m.insert(8, 'cuotas_maestro')
+            cols_m.insert(9, 'cuotas')
+            cols_m.insert(10, 'cuotas_correctas')
         
-        columnas_existentes = [col for col in columnas_mostrar if col in df_mostrar.columns]
-        df_display = df_mostrar[columnas_existentes].copy()
+        cols_ex = [c for c in cols_m if c in df_m.columns]
+        df_disp = df_m[cols_ex].copy()
         
         nombres = {
             'sku': 'SKU', 'titulo': 'Título', 'precio_maestro': 'Precio Maestro',
@@ -819,156 +562,33 @@ with tab2:
             'estado_scraping': 'Estado Scraping'
         }
         
-        df_display = df_display.rename(columns=nombres)
+        df_disp = df_disp.rename(columns=nombres)
+        if 'Precio OK' in df_disp.columns:
+            df_disp['Precio OK'] = df_disp['Precio OK'].map({True: '✅', False: '❌'})
+        if 'Cuotas OK' in df_disp.columns:
+            df_disp['Cuotas OK'] = df_disp['Cuotas OK'].map({True: '✅', False: '❌'})
         
-        if 'Precio OK' in df_display.columns:
-            df_display['Precio OK'] = df_display['Precio OK'].map({True: '✅', False: '❌'})
+        st.dataframe(df_disp, use_container_width=True, height=500)
         
-        if 'Cuotas OK' in df_display.columns:
-            df_display['Cuotas OK'] = df_display['Cuotas OK'].map({True: '✅', False: '❌'})
-        
-        st.dataframe(df_display, use_container_width=True, height=500)
-        
-        st.markdown("---")
-        
+        st.markdown("### Exportar")
         col1, col2 = st.columns(2)
         with col1:
-            excel_file = crear_excel_formateado(df_results, selected_store)
-            st.download_button(
-                "📊 Excel",
-                data=excel_file,
-                file_name=f"Auditoria_{selected_store}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-        
-        with col2:
-            csv = df_mostrar.to_csv(index=False)
-            st.download_button(
-                "📄 CSV",
-                data=csv,
-                file_name=f"Auditoria_{selected_store}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+            excel = crear_excel(df_r, selected_store)
+            st.download_button("📊 Excel", excel, f"Audit_{selected_store}_{datetime.now().strftime('%Y%m%d')}.xlsx", use_container_width=True)
     else:
-        st.info("Ejecuta una auditoría primero")
+        st.info("Ejecuta auditoría primero")
 
 with tab3:
     if st.session_state.audit_results is not None:
         df = st.session_state.audit_results
-        
-        if 'precio_ok' not in df.columns or 'precio_web' not in df.columns:
-            st.warning("Ejecuta una auditoría primero")
-        else:
-            st.markdown("### 📈 Dashboard")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                total = len(df)
-                st.metric("📦 Total", total)
-            
-            with col2:
-                validos = df[df['precio_web'].notna()]
-                if len(validos) > 0:
-                    precision = len(validos[validos['precio_ok'] == True]) / len(validos) * 100
-                else:
-                    precision = 0
-                st.metric("✅ Precisión", f"{precision:.1f}%")
-            
-            with col3:
-                if 'estado_producto' in df.columns:
-                    disponibles = len(df[df['estado_producto'] == 'Activo'])
-                    disp_pct = (disponibles / total * 100) if total > 0 else 0
-                else:
-                    disp_pct = 0
-                st.metric("🟢 Disponibilidad", f"{disp_pct:.1f}%")
-            
-            with col4:
-                if 'variacion_precio_%' in df.columns:
-                    var_prom = df['variacion_precio_%'].abs().mean() if not df['variacion_precio_%'].isna().all() else 0
-                else:
-                    var_prom = 0
-                st.metric("📊 Variación", f"{var_prom:.1f}%")
-            
-            st.markdown("---")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if 'variacion_precio_%' in df.columns:
-                    df_graf = df[df['variacion_precio_%'].notna() & (df['variacion_precio_%'] != 0)]
-                    if not df_graf.empty:
-                        fig = px.histogram(
-                            df_graf, 
-                            x='variacion_precio_%',
-                            nbins=20,
-                            title='Variaciones de Precio',
-                            labels={'variacion_precio_%': 'Variación %'}
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.info("Sin datos de variación")
-                else:
-                    st.info("Sin datos disponibles")
-            
-            with col2:
-                if 'precio_ok' in df.columns and 'estado_producto' in df.columns:
-                    estados_data = {
-                        'Estado': ['✅ OK', '❌ Error', '⚠️ No disp.'],
-                        'Cantidad': [
-                            len(df[df['precio_ok'] == True]),
-                            len(df[(df['precio_ok'] == False) & df['precio_web'].notna()]),
-                            len(df[df['estado_producto'] == 'No disponible en el front'])
-                        ]
-                    }
-                    
-                    fig = px.pie(
-                        estados_data,
-                        values='Cantidad',
-                        names='Estado',
-                        title='Estado de Productos'
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("Sin datos de estado")
-            
-            if selected_store in ["Fravega", "Megatone"] and 'cuotas' in df.columns:
-                st.markdown("---")
-                st.markdown("### 💳 Cuotas")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    df_cuotas = df[df['cuotas'].notna()]
-                    if not df_cuotas.empty:
-                        cuotas_count = df_cuotas['cuotas'].value_counts().sort_index()
-                        fig = px.bar(
-                            x=cuotas_count.index,
-                            y=cuotas_count.values,
-                            title='Distribución de Cuotas',
-                            labels={'x': 'Cuotas', 'y': 'Cantidad'}
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                
-                with col2:
-                    if 'cuotas_correctas' in df.columns:
-                        cuotas_ok = len(df[df['cuotas_correctas'] == True])
-                        cuotas_error = len(df[df['cuotas_correctas'] == False])
-                        
-                        fig = px.pie(
-                            values=[cuotas_ok, cuotas_error],
-                            names=['✅ Correctas', '❌ Incorrectas'],
-                            title='Validación'
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
+        if 'precio_ok' in df.columns:
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total", len(df))
+            ok = len(df[df['precio_ok'] == True])
+            col2.metric("✅ OK", ok)
+            err = len(df[(df['precio_ok'] == False) & df['precio_web'].notna()])
+            col3.metric("❌ Errores", err)
     else:
-        st.info("Ejecuta una auditoría primero")
+        st.info("Ejecuta auditoría primero")
 
-st.markdown("---")
-st.markdown(
-    f"""<div style='text-align: center; color: gray;'>
-        v6.0 | {datetime.now().strftime("%d/%m/%Y %H:%M")}
-    </div>""",
-    unsafe_allow_html=True
-)
+st.markdown(f'<div style="text-align:center; color:gray;">v6.2 | {datetime.now().strftime("%d/%m/%Y %H:%M")}</div>', unsafe_allow_html=True)
