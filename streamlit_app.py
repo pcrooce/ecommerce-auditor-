@@ -63,27 +63,56 @@ if 'audit_results' not in st.session_state:
     st.session_state.audit_results = None
 
 def detectar_columnas_fravega(df):
+    """Detecta columnas automáticamente con mapeo expandido"""
     resultado = {'url': None, 'precio': None, 'sku': None, 'cuotas': None}
     
+    # Patrones para URL
+    patrones_url = [
+        'url fravega', 'url fvg', 'link fravega', 'link fvg',
+        'fravega url', 'fvg url', 'fravega link', 'fvg link'
+    ]
+    
+    # Patrones para Precio
+    patrones_precio = [
+        'pvp fravega', 'pvp fvg', 'precio fravega', 'precio fvg',
+        'fravega pvp', 'fvg pvp', 'fravega precio', 'fvg precio'
+    ]
+    
+    # Patrones para Cuotas
+    patrones_cuotas = [
+        'cuotas fvg', 'cuotas fravega', 'csi fvg', 'csi fravega',
+        'financiacion fvg', 'financiación fvg', 'financiacion fravega',
+        'fvg cuotas', 'fravega cuotas'
+    ]
+    
     for col in df.columns:
-        col_lower = col.lower()
+        col_lower = col.lower().strip()
         
+        # Detectar URL
         if resultado['url'] is None:
-            if any(x in col_lower for x in ['fravega', 'fvg', 'url']) and 'url' in col_lower:
-                resultado['url'] = col
+            for patron in patrones_url:
+                if patron in col_lower:
+                    resultado['url'] = col
+                    break
         
+        # Detectar Precio
         if resultado['precio'] is None:
-            if any(x in col_lower for x in ['fravega', 'fvg', 'precio']):
-                if 'precio' in col_lower and 'url' not in col_lower:
+            for patron in patrones_precio:
+                if patron in col_lower:
                     resultado['precio'] = col
+                    break
         
+        # Detectar SKU
         if resultado['sku'] is None:
             if any(word in col_lower for word in ['sku', 'codigo', 'código']):
                 resultado['sku'] = col
         
+        # Detectar Cuotas
         if resultado['cuotas'] is None:
-            if any(x in col_lower for x in ['cuotas fvg', 'csi fvg', 'financiacion', 'financiación']):
-                resultado['cuotas'] = col
+            for patron in patrones_cuotas:
+                if patron in col_lower:
+                    resultado['cuotas'] = col
+                    break
     
     return resultado
 
@@ -376,16 +405,21 @@ def crear_excel_formateado(df_results):
         ]
         ws.append(row_data)
     
-    # Auto-ajustar ancho de columnas
-    for column in ws.columns:
+    # CORRECCIÓN: Auto-ajustar ancho de columnas correctamente
+    for col_idx in range(1, len(columnas) + 1):
         max_length = 0
-        column_letter = column[0].column_letter
-        for cell in column:
+        column_letter = ws.cell(row=3, column=col_idx).column_letter
+        
+        for row_idx in range(3, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
             try:
-                if len(str(cell.value)) > max_length:
-                    max_length = len(str(cell.value))
+                if cell.value:
+                    cell_length = len(str(cell.value))
+                    if cell_length > max_length:
+                        max_length = cell_length
             except:
                 pass
+        
         adjusted_width = min(max_length + 2, 50)
         ws.column_dimensions[column_letter].width = adjusted_width
     
@@ -440,36 +474,66 @@ with tab1:
         
         columnas_detectadas = detectar_columnas_fravega(df_maestro)
         
-        st.markdown("### ✅ Detección de Columnas")
+        st.markdown("### ✅ Detección Automática de Columnas")
         
-        col1, col2 = st.columns(2)
+        # Validar que se detectaron todas las columnas necesarias
+        todas_detectadas = all([
+            columnas_detectadas['url'],
+            columnas_detectadas['sku'],
+            columnas_detectadas['precio'],
+            columnas_detectadas['cuotas']
+        ])
         
-        with col1:
-            if columnas_detectadas['url']:
-                st.success(f"✅ URL detectada: `{columnas_detectadas['url']}`")
-                url_column = columnas_detectadas['url']
-            else:
-                st.error("❌ URL no detectada automáticamente")
-                url_column = st.selectbox("Seleccionar columna URL:", df_maestro.columns)
+        if todas_detectadas:
+            col1, col2 = st.columns(2)
             
-            if columnas_detectadas['sku']:
-                st.success(f"✅ SKU detectado: `{columnas_detectadas['sku']}`")
-                sku_column = columnas_detectadas['sku']
-            else:
-                sku_column = st.selectbox("Seleccionar columna SKU:", df_maestro.columns)
-        
-        with col2:
-            if columnas_detectadas['precio']:
-                st.success(f"✅ Precio detectado: `{columnas_detectadas['precio']}`")
-                precio_column = columnas_detectadas['precio']
-            else:
-                precio_column = st.selectbox("Seleccionar columna Precio:", df_maestro.columns)
+            with col1:
+                st.success(f"✅ URL: `{columnas_detectadas['url']}`")
+                st.success(f"✅ SKU: `{columnas_detectadas['sku']}`")
             
-            if columnas_detectadas['cuotas']:
-                st.success(f"✅ Cuotas detectadas: `{columnas_detectadas['cuotas']}`")
-                cuotas_column = columnas_detectadas['cuotas']
-            else:
-                cuotas_column = st.selectbox("Seleccionar columna Cuotas:", df_maestro.columns)
+            with col2:
+                st.success(f"✅ Precio: `{columnas_detectadas['precio']}`")
+                st.success(f"✅ Cuotas: `{columnas_detectadas['cuotas']}`")
+            
+            url_column = columnas_detectadas['url']
+            sku_column = columnas_detectadas['sku']
+            precio_column = columnas_detectadas['precio']
+            cuotas_column = columnas_detectadas['cuotas']
+            
+        else:
+            st.warning("⚠️ No se pudieron detectar todas las columnas automáticamente. Seleccione manualmente:")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if columnas_detectadas['url']:
+                    st.success(f"✅ URL detectada: `{columnas_detectadas['url']}`")
+                    url_column = columnas_detectadas['url']
+                else:
+                    st.error("❌ URL no detectada")
+                    url_column = st.selectbox("Seleccionar columna URL:", df_maestro.columns, key='url')
+                
+                if columnas_detectadas['sku']:
+                    st.success(f"✅ SKU detectado: `{columnas_detectadas['sku']}`")
+                    sku_column = columnas_detectadas['sku']
+                else:
+                    st.error("❌ SKU no detectado")
+                    sku_column = st.selectbox("Seleccionar columna SKU:", df_maestro.columns, key='sku')
+            
+            with col2:
+                if columnas_detectadas['precio']:
+                    st.success(f"✅ Precio detectado: `{columnas_detectadas['precio']}`")
+                    precio_column = columnas_detectadas['precio']
+                else:
+                    st.error("❌ Precio no detectado")
+                    precio_column = st.selectbox("Seleccionar columna Precio:", df_maestro.columns, key='precio')
+                
+                if columnas_detectadas['cuotas']:
+                    st.success(f"✅ Cuotas detectadas: `{columnas_detectadas['cuotas']}`")
+                    cuotas_column = columnas_detectadas['cuotas']
+                else:
+                    st.error("❌ Cuotas no detectadas")
+                    cuotas_column = st.selectbox("Seleccionar columna Cuotas:", df_maestro.columns, key='cuotas')
         
         df_tienda = df_maestro[df_maestro[url_column].notna()].copy()
         
