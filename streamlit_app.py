@@ -179,20 +179,28 @@ class WebScraper:
         cuotas_containers = soup.select(self.config['selector_cuotas_container'])
         
         for container in cuotas_containers:
+            # Buscar el div padre que contiene las imágenes
             parent = container.find_parent()
             if not parent:
                 parent = container
             
-            imagenes = parent.find_all('img', src=True, limit=10)
+            # Buscar específicamente el div hermano con las imágenes
+            parent_wrapper = parent.find_parent()
+            if parent_wrapper:
+                imagenes = parent_wrapper.find_all('img', src=True)
+            else:
+                imagenes = parent.find_all('img', src=True)
             
-            tiene_visa_master = False
+            # Contar cuántas imágenes de Visa/Mastercard hay
+            visa_master_count = 0
             for img in imagenes:
                 src = img.get('src', '').lower()
-                if any(url_pattern in src for url_pattern in self.config.get('urls_visa_master', [])):
-                    tiene_visa_master = True
-                    break
+                # Buscar las URLs exactas de Visa y Mastercard de Frávega
+                if 'd91d7904a8578' in src or '54c0d769ece1b' in src:
+                    visa_master_count += 1
             
-            if tiene_visa_master:
+            # Solo considerar si tiene AMBAS (Visa Y Mastercard)
+            if visa_master_count >= 2:
                 texto = container.get_text()
                 match = re.search(r'(\d+)\s*cuotas?', texto, re.IGNORECASE)
                 if match:
@@ -255,13 +263,22 @@ class WebScraper:
             if 'selector_categoria' in self.config:
                 categorias = soup.select(self.config['selector_categoria'])
                 if len(categorias) > 0:
+                    # Para Frávega: tomar solo la última categoría válida del breadcrumb
+                    # Ignorar "Frávega", "Inicio", "Home"
                     categorias_validas = []
                     for cat in categorias:
                         texto = cat.get_text(strip=True)
-                        if texto.lower() not in ['inicio', 'home', self.tienda.lower()]:
+                        if texto and texto.lower() not in ['inicio', 'home', 'frávega', 'fravega']:
                             categorias_validas.append(texto)
+                    
+                    # Tomar la última categoría válida
                     if categorias_validas:
                         resultado['categoria'] = categorias_validas[-1]
+            
+            # Verificar si el producto está inhabilitado para la compra
+            boton_compra = soup.select_one('button[data-test-id="product-buy-button"]')
+            if boton_compra and boton_compra.has_attr('disabled'):
+                resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
             
             if self.tienda == "Fravega":
                 resultado['cuotas'] = self.extraer_cuotas_fravega(soup)
