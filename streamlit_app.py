@@ -238,7 +238,15 @@ class WebScraper:
                 return resultado
             
             if 'selector_titulo' in self.config:
+                # Intentar múltiples selectores para el título
                 titulo_elem = soup.select_one(self.config['selector_titulo'])
+                if not titulo_elem:
+                    # Fallback: buscar h1 con data-test-id
+                    titulo_elem = soup.find('h1', {'data-test-id': 'product-title'})
+                if not titulo_elem:
+                    # Otro fallback: cualquier h1 en la página
+                    titulo_elem = soup.find('h1')
+                
                 if titulo_elem:
                     resultado['titulo'] = titulo_elem.get_text(strip=True)
             
