@@ -12,6 +12,13 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+    st.warning("Playwright no instalado. Frávega tendrá funcionalidad limitada.")
+
+try:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Border, Side
 except ImportError:
@@ -169,8 +176,129 @@ class WebScraper:
         self.tienda = tienda_nombre
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'es-AR,es;q=0.9,en;q=0.8',
+            'Referer': 'https://www.google.com/'
         })
+    
+    def scrape_fravega_con_playwright(self, url):
+        """Scrapea Frávega usando Playwright para contenido dinámico"""
+        resultado = {
+            'url': url,
+            'titulo': None,
+            'precio_web': None,
+            'precio_tachado': None,
+            'descuento_%': None,
+            'categoria': None,
+            'cuotas': None,
+            'estado_producto': 'Activo',
+            'error': None,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    viewport={'width': 1920, 'height': 1080},
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                )
+                page = context.new_page()
+                
+                page.goto(url, wait_until='networkidle', timeout=30000)
+                
+                # Esperar un momento adicional para JavaScript
+                page.wait_for_timeout(2000)
+                
+                # Título
+                try:
+                    titulo = page.locator("h1[data-test-id='product-title']").text_content(timeout=5000)
+                    if titulo:
+                        resultado['titulo'] = titulo.strip()
+                except:
+                    pass
+                
+                # Categorías
+                try:
+                    categorias_elems = page.locator("span[itemprop='name']").all()
+                    categorias_validas = []
+                    for elem in categorias_elems:
+                        texto = elem.text_content().strip()
+                        if texto and texto.lower() not in ['frávega', 'fravega', 'inicio', 'home']:
+                            categorias_validas.append(texto)
+                    
+                    if categorias_validas:
+                        resultado['categoria'] = categorias_validas[-1]
+                except:
+                    pass
+                
+                # Precio
+                try:
+                    precio = page.locator("span.sc-1d9b1d9e-0.sc-faa1a185-3").first.text_content(timeout=5000)
+                    resultado['precio_web'] = limpiar_precio(precio)
+                except:
+                    pass
+                
+                # Precio tachado
+                try:
+                    tachado = page.locator("span.sc-e081bce1-0.sc-faa1a185-4").first.text_content(timeout=5000)
+                    resultado['precio_tachado'] = limpiar_precio(tachado)
+                except:
+                    pass
+                
+                # Descuento
+                try:
+                    descuento = page.locator("span.sc-e2aca368-0").first.text_content(timeout=5000)
+                    match = re.search(r'(\d+)', descuento)
+                    if match:
+                        resultado['descuento_%'] = float(match.group(1))
+                except:
+                    pass
+                
+                # Cuotas con Visa/Mastercard
+                try:
+                    cuotas_containers = page.locator("span.sc-3cba7521-10").all()
+                    
+                    for container in cuotas_containers:
+                        # Buscar imágenes cercanas
+                        parent = container.locator("xpath=..").first
+                        imagenes = parent.locator("img").all()
+                        
+                        visa_master_count = 0
+                        for img in imagenes:
+                            src = img.get_attribute('src')
+                            if src:
+                                src_lower = src.lower()
+                                if 'd91d7904a8578' in src_lower or '54c0d769ece1b' in src_lower:
+                                    visa_master_count += 1
+                        
+                        if visa_master_count >= 2:
+                            texto = container.text_content()
+                            match = re.search(r'(\d+)\s*cuotas?', texto, re.IGNORECASE)
+                            if match:
+                                resultado['cuotas'] = int(match.group(1))
+                                break
+                    
+                    if not resultado['cuotas']:
+                        resultado['cuotas'] = 1
+                except:
+                    resultado['cuotas'] = 1
+                
+                # Verificar si está inhabilitado
+                try:
+                    boton = page.locator("button[data-test-id='product-buy-button']").first
+                    if boton.is_disabled():
+                        resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
+                except:
+                    pass
+                
+                browser.close()
+                
+        except Exception as e:
+            resultado['error'] = f"Playwright error: {str(e)}"
+        
+        return resultado
     
     def extraer_cuotas_fravega(self, soup):
         if 'selector_cuotas_container' not in self.config:
@@ -386,6 +514,15 @@ with st.sidebar:
     """, unsafe_allow_html=True)
     
     selected_store = st.selectbox("🏪 Tienda", list(TIENDAS_CONFIG.keys()))
+    
+    # Info sobre Playwright para Frávega
+    if selected_store == "Fravega":
+        if not PLAYWRIGHT_AVAILABLE:
+            st.error("⚠️ Playwright requerido para Frávega")
+            st.info("Se instalará automáticamente en Streamlit Cloud")
+        else:
+            st.success("✅ Playwright listo")
+    
     price_threshold = st.slider("🎯 Tolerancia (%)", 0, 20, 5, 1)
     
     modo_operacion = st.radio("🚀 Modo", [
