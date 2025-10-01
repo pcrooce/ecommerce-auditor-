@@ -1,8 +1,8 @@
-   streamlit
-   pandas
-   numpy
-   plotly
-   openpyxl
-   requests
-   beautifulsoup4
-   lxml
+streamlit
+pandas
+numpy
+plotly
+openpyxl
+requests
+beautifulsoup4
+playwright
