@@ -184,6 +184,37 @@ class WebScraper:
     
     def scrape_fravega_con_playwright(self, url):
         """Scrapea Frávega usando Playwright para contenido dinámico"""
+        
+        # VALIDACIÓN: URL debe ser válida
+        if not url or not isinstance(url, str):
+            return {
+                'url': url,
+                'titulo': None,
+                'precio_web': None,
+                'precio_tachado': None,
+                'descuento_%': None,
+                'categoria': None,
+                'cuotas': None,
+                'estado_producto': 'Error - URL inválida',
+                'error': 'URL vacía o inválida',
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+        
+        # VALIDACIÓN: URL debe comenzar con http:// o https://
+        if not url.startswith('http://') and not url.startswith('https://'):
+            return {
+                'url': url,
+                'titulo': None,
+                'precio_web': None,
+                'precio_tachado': None,
+                'descuento_%': None,
+                'categoria': None,
+                'cuotas': None,
+                'estado_producto': 'Error - URL incompleta',
+                'error': 'URL debe comenzar con https://',
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+        
         resultado = {
             'url': url,
             'titulo': None,
@@ -207,16 +238,33 @@ class WebScraper:
                 page = context.new_page()
                 
                 page.goto(url, wait_until='networkidle', timeout=30000)
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(3000)  # Aumentado a 3 segundos
                 
-                # PRIMERO: Verificar si está inhabilitado
+                # PRIMERO: Verificar si está inhabilitado (múltiples métodos)
                 producto_inhabilitado = False
                 try:
+                    # Método 1: Verificar atributo disabled del botón
                     boton = page.locator("button[data-test-id='product-buy-button']").first
-                    if boton.is_disabled():
+                    
+                    # Esperar a que el botón aparezca
+                    boton.wait_for(timeout=5000)
+                    
+                    # Verificar si está deshabilitado
+                    is_disabled = boton.is_disabled()
+                    has_disabled_attr = boton.get_attribute('disabled') is not None
+                    
+                    if is_disabled or has_disabled_attr:
                         producto_inhabilitado = True
                         resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
-                except:
+                    
+                    # Método 2: Verificar el texto del botón (a veces dice "No disponible")
+                    texto_boton = boton.text_content()
+                    if texto_boton and 'no disponible' in texto_boton.lower():
+                        producto_inhabilitado = True
+                        resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
+                        
+                except Exception as e:
+                    # Si no encontramos el botón, el producto podría no existir
                     pass
                 
                 # Título (siempre intentar obtener)
@@ -271,31 +319,44 @@ class WebScraper:
                     pass
                 
                 # Cuotas con Visa/Mastercard
+                cuotas_encontradas = False
                 try:
                     cuotas_containers = page.locator("span.sc-3cba7521-10").all()
                     
                     for container in cuotas_containers:
-                        parent = container.locator("xpath=..").first
+                        # Buscar el contenedor padre que tiene las imágenes
+                        parent = container.locator("xpath=../..")  # Subir 2 niveles
                         imagenes = parent.locator("img").all()
                         
-                        visa_master_count = 0
+                        # Contar imágenes de Visa y Mastercard
+                        visa_count = 0
+                        master_count = 0
+                        
                         for img in imagenes:
                             src = img.get_attribute('src')
                             if src:
                                 src_lower = src.lower()
-                                if 'd91d7904a8578' in src_lower or '54c0d769ece1b' in src_lower:
-                                    visa_master_count += 1
+                                # Visa: d91d7904a8578
+                                if 'd91d7904a8578' in src_lower:
+                                    visa_count += 1
+                                # Mastercard: 54c0d769ece1b
+                                if '54c0d769ece1b' in src_lower:
+                                    master_count += 1
                         
-                        if visa_master_count >= 2:
+                        # Solo si tiene AMBAS tarjetas (Visa Y Mastercard)
+                        if visa_count >= 1 and master_count >= 1:
                             texto = container.text_content()
                             match = re.search(r'(\d+)\s*cuotas?', texto, re.IGNORECASE)
                             if match:
                                 resultado['cuotas'] = int(match.group(1))
+                                cuotas_encontradas = True
                                 break
                     
-                    if not resultado['cuotas']:
+                    # Si no encontró financiación con ambas tarjetas, es contado
+                    if not cuotas_encontradas:
                         resultado['cuotas'] = 1
-                except:
+                except Exception as e:
+                    # Si hay error en scraping de cuotas, asumir contado
                     resultado['cuotas'] = 1
                 
                 browser.close()
