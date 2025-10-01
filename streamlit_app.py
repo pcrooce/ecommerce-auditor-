@@ -207,11 +207,19 @@ class WebScraper:
                 page = context.new_page()
                 
                 page.goto(url, wait_until='networkidle', timeout=30000)
-                
-                # Esperar un momento adicional para JavaScript
                 page.wait_for_timeout(2000)
                 
-                # Título
+                # PRIMERO: Verificar si está inhabilitado
+                producto_inhabilitado = False
+                try:
+                    boton = page.locator("button[data-test-id='product-buy-button']").first
+                    if boton.is_disabled():
+                        producto_inhabilitado = True
+                        resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
+                except:
+                    pass
+                
+                # Título (siempre intentar obtener)
                 try:
                     titulo = page.locator("h1[data-test-id='product-title']").text_content(timeout=5000)
                     if titulo:
@@ -219,7 +227,7 @@ class WebScraper:
                 except:
                     pass
                 
-                # Categorías
+                # Categorías (siempre intentar obtener)
                 try:
                     categorias_elems = page.locator("span[itemprop='name']").all()
                     categorias_validas = []
@@ -233,7 +241,13 @@ class WebScraper:
                 except:
                     pass
                 
-                # Precio
+                # Si está inhabilitado, NO intentar scrapear precios/cuotas
+                if producto_inhabilitado:
+                    resultado['cuotas'] = None  # No hay cuotas disponibles
+                    browser.close()
+                    return resultado
+                
+                # Precio (solo si está habilitado)
                 try:
                     precio = page.locator("span.sc-1d9b1d9e-0.sc-faa1a185-3").first.text_content(timeout=5000)
                     resultado['precio_web'] = limpiar_precio(precio)
@@ -261,7 +275,6 @@ class WebScraper:
                     cuotas_containers = page.locator("span.sc-3cba7521-10").all()
                     
                     for container in cuotas_containers:
-                        # Buscar imágenes cercanas
                         parent = container.locator("xpath=..").first
                         imagenes = parent.locator("img").all()
                         
@@ -285,18 +298,11 @@ class WebScraper:
                 except:
                     resultado['cuotas'] = 1
                 
-                # Verificar si está inhabilitado
-                try:
-                    boton = page.locator("button[data-test-id='product-buy-button']").first
-                    if boton.is_disabled():
-                        resultado['estado_producto'] = 'A corregir - Inhabilitado para la compra'
-                except:
-                    pass
-                
                 browser.close()
                 
         except Exception as e:
             resultado['error'] = f"Playwright error: {str(e)}"
+            resultado['estado_producto'] = 'Error - Scraping fallido'
         
         return resultado
     
@@ -467,12 +473,13 @@ def crear_excel_formateado(df_results, tienda):
     if tienda in ["Fravega", "Megatone"]:
         columnas = ['SKU', 'Título', 'Precio Maestro', 'Precio Web', 'Precio Tachado',
                    'Descuento %', 'Variación %', 'Precio OK', 'Cuotas Web', 'Cuotas Maestro',
-                   'Cuotas OK', 'Categoría', 'Estado', 'URL']
-        ws.merge_cells('A1:N1')
+                   'Cuotas OK', 'Categoría', 'Estado Producto', 'Estado Scraping', 'URL']
+        ws.merge_cells('A1:O1')
     else:
         columnas = ['SKU', 'Título', 'Precio Maestro', 'Precio Web', 'Precio Tachado',
-                   'Descuento %', 'Variación %', 'Precio OK', 'Categoría', 'Estado', 'URL']
-        ws.merge_cells('A1:K1')
+                   'Descuento %', 'Variación %', 'Precio OK', 'Categoría', 'Estado Producto', 
+                   'Estado Scraping', 'URL']
+        ws.merge_cells('A1:L1')
     
     ws.append([])
     ws.append(columnas)
@@ -489,14 +496,16 @@ def crear_excel_formateado(df_results, tienda):
                 row.get('variacion_precio_%'), 'Sí' if row.get('precio_ok') else 'No',
                 row.get('cuotas'), row.get('cuotas_maestro'),
                 'Sí' if row.get('cuotas_correctas') else 'No',
-                row.get('categoria'), row.get('estado_producto'), row.get('url')
+                row.get('categoria'), row.get('estado_producto'), 
+                row.get('estado_scraping'), row.get('url')
             ]
         else:
             row_data = [
                 row.get('sku'), row.get('titulo'), row.get('precio_maestro'),
                 row.get('precio_web'), row.get('precio_tachado'), row.get('descuento_%'),
                 row.get('variacion_precio_%'), 'Sí' if row.get('precio_ok') else 'No',
-                row.get('categoria'), row.get('estado_producto'), row.get('url')
+                row.get('categoria'), row.get('estado_producto'),
+                row.get('estado_scraping'), row.get('url')
             ]
         ws.append(row_data)
     
@@ -731,7 +740,8 @@ with tab2:
             'descuento_%': 'Descuento %', 'variacion_precio_%': 'Variación %',
             'precio_ok': 'Precio OK', 'cuotas_maestro': 'Cuotas Maestro',
             'cuotas': 'Cuotas Web', 'cuotas_correctas': 'Cuotas OK',
-            'categoria': 'Categoría', 'estado_producto': 'Estado'
+            'categoria': 'Categoría', 'estado_producto': 'Estado Producto',
+            'estado_scraping': 'Estado Scraping'
         }
         
         df_display = df_display.rename(columns=nombres)
