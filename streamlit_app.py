@@ -232,23 +232,37 @@ class WebScraper:
             response.raise_for_status()
             soup = BeautifulSoup(response.content, 'html.parser')
             
+            # DEBUG: Guardar HTML para inspección (solo para Frávega)
+            if self.tienda == "Fravega":
+                # Buscar título de todas las formas posibles
+                h1_all = soup.find_all('h1')
+                titulo_encontrado = None
+                
+                for h1 in h1_all:
+                    texto = h1.get_text(strip=True)
+                    if texto and len(texto) > 10:  # Título real tiene más de 10 caracteres
+                        titulo_encontrado = texto
+                        break
+                
+                if titulo_encontrado:
+                    resultado['titulo'] = titulo_encontrado
+                
+                # Buscar categorías de todas las formas posibles
+                spans_itemprop = soup.find_all('span', {'itemprop': 'name'})
+                if spans_itemprop:
+                    categorias_validas = []
+                    for span in spans_itemprop:
+                        texto = span.get_text(strip=True)
+                        if texto and texto.lower() not in ['frávega', 'fravega', 'inicio', 'home']:
+                            categorias_validas.append(texto)
+                    
+                    if categorias_validas:
+                        resultado['categoria'] = categorias_validas[-1]
+            
             html_text = soup.get_text().lower()
             if 'no longer available' in html_text or 'no está disponible' in html_text:
                 resultado['estado_producto'] = 'No disponible en el front'
                 return resultado
-            
-            if 'selector_titulo' in self.config:
-                # Intentar múltiples selectores para el título
-                titulo_elem = soup.select_one(self.config['selector_titulo'])
-                if not titulo_elem:
-                    # Fallback: buscar h1 con data-test-id
-                    titulo_elem = soup.find('h1', {'data-test-id': 'product-title'})
-                if not titulo_elem:
-                    # Otro fallback: cualquier h1 en la página
-                    titulo_elem = soup.find('h1')
-                
-                if titulo_elem:
-                    resultado['titulo'] = titulo_elem.get_text(strip=True)
             
             if 'selector_precio' in self.config:
                 precio_elem = soup.select_one(self.config['selector_precio'])
@@ -267,21 +281,6 @@ class WebScraper:
                     match = re.search(r'(\d+)', desc_text)
                     if match:
                         resultado['descuento_%'] = float(match.group(1))
-            
-            if 'selector_categoria' in self.config:
-                categorias = soup.select(self.config['selector_categoria'])
-                if len(categorias) > 0:
-                    # Para Frávega: tomar solo la última categoría válida del breadcrumb
-                    # Ignorar "Frávega", "Inicio", "Home"
-                    categorias_validas = []
-                    for cat in categorias:
-                        texto = cat.get_text(strip=True)
-                        if texto and texto.lower() not in ['inicio', 'home', 'frávega', 'fravega']:
-                            categorias_validas.append(texto)
-                    
-                    # Tomar la última categoría válida
-                    if categorias_validas:
-                        resultado['categoria'] = categorias_validas[-1]
             
             # Verificar si el producto está inhabilitado para la compra
             boton_compra = soup.select_one('button[data-test-id="product-buy-button"]')
